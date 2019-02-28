@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"os"
 	"os/user"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 )
@@ -96,6 +98,43 @@ func (c *Client) Run(cmd string, a ...interface{}) {
 		panic(err)
 	}
 
+}
+
+func (c *Client) RunMultipleCmds(cmds []string, delayDuration time.Duration) {
+	session, err := c.client.NewSession()
+	if err != nil {
+		panic(err)
+	}
+	defer session.Close()
+
+	modes := ssh.TerminalModes{
+		ssh.ECHO:          0,     // disable echoing
+		ssh.TTY_OP_ISPEED: 14400, // input speed = 14.4kbaud
+		ssh.TTY_OP_OSPEED: 14400, // output speed = 14.4kbaud
+	}
+	err = session.RequestPty("xterm", 80, 40, modes)
+	if err != nil {
+		panic(err)
+	}
+
+	session.Stdout = os.Stdout
+	session.Stderr = os.Stdout
+
+	in, err := session.StdinPipe()
+	if err != nil {
+		panic(err)
+	}
+	err = session.Shell()
+	if err != nil {
+		panic(err)
+	}
+	for _, cmd := range cmds {
+		_, err = in.Write([]byte(cmd + "\n"))
+		if err != nil {
+			panic(err)
+		}
+		<-time.After(delayDuration)
+	}
 }
 
 func (c *Client) PromptRun(suffixList, answerList []string, cmd string, a ...interface{}) {
@@ -238,5 +277,8 @@ func SSHCopyId(username, password, host, port string) {
 	client := NewClient(username, password, host, port)
 	client.Run("mkdir -p ~/.ssh")
 	client.AppendToFile(string(pubKeyContent), "~/.ssh/authorized_keys")
+	// set permission to rwx for owner only
+	client.Run("chmod 700 ~/.ssh")
+	client.Run("chmod 700 ~/.ssh/authorized_keys")
 	client.Exit()
 }
