@@ -9,6 +9,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -72,6 +73,7 @@ func (c *Client) createNewSession() *ssh.Session {
 		ssh.ECHO:          0,     // disable echoing
 		ssh.TTY_OP_ISPEED: 14400, // input speed = 14.4kbaud
 		ssh.TTY_OP_OSPEED: 14400, // output speed = 14.4kbaud
+		ssh.OPOST:         0,
 	}
 	err = session.RequestPty("xterm", 80, 40, modes)
 	if err != nil {
@@ -111,6 +113,7 @@ func (c *Client) RunMultipleCmds(cmds []string, delayDuration time.Duration) {
 		ssh.ECHO:          0,     // disable echoing
 		ssh.TTY_OP_ISPEED: 14400, // input speed = 14.4kbaud
 		ssh.TTY_OP_OSPEED: 14400, // output speed = 14.4kbaud
+		ssh.OPOST:         0,
 	}
 	err = session.RequestPty("xterm", 80, 40, modes)
 	if err != nil {
@@ -165,6 +168,7 @@ func (c *Client) Output(cmd string) string {
 		panic(err)
 	}
 
+	// return strings.Replace(stdoutBuf.String(), "\r", "", -1)
 	return stdoutBuf.String()
 }
 
@@ -190,8 +194,7 @@ func (c *Client) SUDORun(cmd string, a ...interface{}) {
 func (c *Client) SUDOWriteToFile(content, filePath string) {
 	session := c.createNewSession()
 	defer session.Close()
-
-	cmd := fmt.Sprintf("echo '%s' | sudo tee %s", content, filePath)
+	cmd := fmt.Sprintf("cat <<'EOF' | sudo tee %s\n%s\nEOF\n", filePath, content)
 	err := session.Run(cmd)
 	if err != nil {
 		panic(err)
@@ -201,8 +204,19 @@ func (c *Client) SUDOWriteToFile(content, filePath string) {
 func (c *Client) WriteToFile(content, filePath string) {
 	session := c.createNewSession()
 	defer session.Close()
+	cmd := fmt.Sprintf("cat <<'EOF' | tee %s\n%s\nEOF\n", filePath, content)
+	err := session.Run(cmd)
+	if err != nil {
+		panic(err)
+	}
+}
 
-	cmd := fmt.Sprintf("echo '%s' | tee %s", content, filePath)
+func (c *Client) WriteToFileContentHasQuote(content, filePath string) {
+	session := c.createNewSession()
+	defer session.Close()
+	// update to this when have time
+	// https://stackoverflow.com/questions/2953081/how-can-i-write-a-heredoc-to-a-file-in-bash-script
+	cmd := fmt.Sprintf(`echo "%s" | tee %s`, content, filePath)
 	err := session.Run(cmd)
 	if err != nil {
 		panic(err)
@@ -254,6 +268,84 @@ func (c *Client) PromptCreateNewPassword(password, cmd string, a ...interface{})
 	if err != nil {
 		panic(err)
 	}
+}
+
+func (c *Client) DownloadFile(remoteFilePath, destFilePath string, a ...interface{}) {
+	session, err := c.client.NewSession()
+	if err != nil {
+		panic(err)
+	}
+	defer session.Close()
+
+	out, err := session.StdoutPipe()
+	if err != nil {
+		panic(err)
+	}
+
+	file, err := os.OpenFile(destFilePath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
+	if err != nil {
+		panic(err)
+	}
+	defer file.Close()
+	cmd := fmt.Sprintf("cat %s", remoteFilePath)
+	if err := session.Start(cmd); err != nil {
+		panic(err)
+	}
+
+	_, err = io.Copy(file, out)
+	if err != nil {
+		panic(err)
+	}
+
+	if err := session.Wait(); err != nil {
+		panic(err)
+	}
+}
+
+func (c *Client) UploadFile(sourceFilePath, remoteFilePath string, a ...interface{}) {
+	session, err := c.client.NewSession()
+	if err != nil {
+		panic(err)
+	}
+	defer session.Close()
+
+	remoteDir := fmt.Sprintf("%s/", filepath.Dir(remoteFilePath))
+	remoteFileName := strings.TrimPrefix(remoteFilePath, remoteDir)
+
+	file, err := os.Open(sourceFilePath)
+	if err != nil {
+		panic(err)
+	}
+	defer file.Close()
+	stat, err := file.Stat()
+	if err != nil {
+		panic(err)
+	}
+
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	go func() {
+		hostIn, err := session.StdinPipe()
+		if err != nil {
+			panic(err)
+		}
+		defer hostIn.Close()
+		fmt.Fprintf(hostIn, "C0664 %d %s\n", stat.Size(), remoteFileName)
+
+		_, err = io.Copy(hostIn, file)
+		if err != nil {
+			panic(err)
+		}
+		fmt.Fprint(hostIn, "\x00")
+		wg.Done()
+	}()
+	cmd := fmt.Sprintf("/usr/bin/scp -t %s", remoteDir)
+	err = session.Run(cmd)
+	if err != nil {
+		panic(err)
+	}
+	wg.Wait()
+
 }
 
 func (c *Client) Exit() {
