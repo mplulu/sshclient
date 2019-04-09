@@ -41,6 +41,40 @@ func NewClient(username, password, host, port string) *Client {
 	return client
 }
 
+func NewClientPasswordAuth(username, password, host, port string) *Client {
+	client := &Client{
+		username: username,
+		password: password,
+		host:     host,
+		port:     port,
+
+		stdout: &Writer{},
+	}
+	finish := make(chan bool)
+	go client.connectPassword(finish)
+	<-finish
+	return client
+}
+
+func (c *Client) connectPassword(finish chan bool) {
+	// SSH client config
+	config := &ssh.ClientConfig{
+		User: c.username,
+		Auth: []ssh.AuthMethod{
+			ssh.Password(c.password),
+		},
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+	}
+
+	// Connect to host
+	client, err := ssh.Dial("tcp", fmt.Sprintf("%s:%s", c.host, c.port), config)
+	if err != nil {
+		panic(err)
+	}
+	c.client = client
+	finish <- true
+}
+
 func (c *Client) connect(finish chan bool) {
 	callback, method := c.getAuthMethodPublicKeys()
 	// SSH client config
@@ -99,7 +133,39 @@ func (c *Client) Run(cmd string, a ...interface{}) {
 	if err != nil {
 		panic(err)
 	}
+}
 
+func (c *Client) RunYes(cmd string, a ...interface{}) {
+	session, err := c.client.NewSession()
+	if err != nil {
+		panic(err)
+	}
+	defer session.Close()
+
+	modes := ssh.TerminalModes{
+		ssh.ECHO:          0,     // disable echoing
+		ssh.TTY_OP_ISPEED: 14400, // input speed = 14.4kbaud
+		ssh.TTY_OP_OSPEED: 14400, // output speed = 14.4kbaud
+		ssh.OPOST:         0,
+	}
+	err = session.RequestPty("xterm", 80, 40, modes)
+	if err != nil {
+		panic(err)
+	}
+
+	in, err := session.StdinPipe()
+	if err != nil {
+		panic(err)
+	}
+
+	writer := NewYesPromptWriter(in)
+	session.Stdout = writer
+	session.Stderr = writer
+
+	err = session.Run(fmt.Sprintf(cmd, a...))
+	if err != nil {
+		panic(err)
+	}
 }
 
 func (c *Client) RunMultipleCmds(cmds []string, delayDuration time.Duration) {
@@ -163,13 +229,13 @@ func (c *Client) Output(cmd string) string {
 
 	var stdoutBuf bytes.Buffer
 	session.Stdout = &stdoutBuf
+	session.Stderr = os.Stdout
 	err := session.Run(cmd)
 	if err != nil {
 		panic(err)
 	}
-
-	// return strings.Replace(stdoutBuf.String(), "\r", "", -1)
-	return stdoutBuf.String()
+	return strings.Replace(stdoutBuf.String(), "\r", "", -1)
+	// return stdoutBuf.String()
 }
 
 func (c *Client) OutputIgnoreError(cmd string) string {

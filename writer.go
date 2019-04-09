@@ -45,6 +45,30 @@ func (w *PasswordPromptWriter) Write(p []byte) (n int, err error) {
 	return n, err
 }
 
+type YesPromptWriter struct {
+	stdin io.WriteCloser
+}
+
+func NewYesPromptWriter(stdin io.WriteCloser) *YesPromptWriter {
+	return &YesPromptWriter{
+		stdin: stdin,
+	}
+}
+
+func (w *YesPromptWriter) Write(p []byte) (n int, err error) {
+	n, err = os.Stdout.Write(p)
+	suffixList := []string{
+		"(yes/no)? ",
+	}
+	for _, suffix := range suffixList {
+		if strings.HasSuffix(string(p), suffix) {
+			w.stdin.Write([]byte("yes" + "\n"))
+			break
+		}
+	}
+	return n, err
+}
+
 type PromptWriter struct {
 	stdin            io.WriteCloser
 	promptSuffixList []string
