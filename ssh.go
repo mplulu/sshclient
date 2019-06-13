@@ -229,7 +229,7 @@ func (c *Client) Output(cmd string) string {
 
 	var stdoutBuf bytes.Buffer
 	session.Stdout = &stdoutBuf
-	session.Stderr = os.Stdout
+	session.Stderr = &stdoutBuf
 	err := session.Run(cmd)
 	if err != nil {
 		panic(err)
