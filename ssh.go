@@ -277,12 +277,10 @@ func (c *Client) WriteToFile(content, filePath string) {
 	}
 }
 
-func (c *Client) WriteToFileContentHasQuote(content, filePath string) {
+func (c *Client) WriteToFileExperiment(content, filePath string) {
 	session := c.createNewSession()
 	defer session.Close()
-	// update to this when have time
-	// https://stackoverflow.com/questions/2953081/how-can-i-write-a-heredoc-to-a-file-in-bash-script
-	cmd := fmt.Sprintf(`echo "%s" | tee %s`, content, filePath)
+	cmd := fmt.Sprintf("cat <<'EOF' | tee %s\n%s\nEOF\n", filePath, content)
 	err := session.Run(cmd)
 	if err != nil {
 		panic(err)
