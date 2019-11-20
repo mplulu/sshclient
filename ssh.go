@@ -197,6 +197,7 @@ func (c *Client) RunMultipleCmds(cmds []string, delayDuration time.Duration) {
 	if err != nil {
 		panic(err)
 	}
+	<-time.After(delayDuration)
 	for _, cmd := range cmds {
 		_, err = in.Write([]byte(cmd + "\n"))
 		if err != nil {
@@ -334,7 +335,7 @@ func (c *Client) PromptCreateNewPassword(password, cmd string, a ...interface{})
 	}
 }
 
-func (c *Client) DownloadFile(remoteFilePath, destFilePath string, a ...interface{}) {
+func (c *Client) DownloadFile(remoteFilePath, destFilePath string) {
 	session, err := c.client.NewSession()
 	if err != nil {
 		panic(err)
@@ -366,7 +367,7 @@ func (c *Client) DownloadFile(remoteFilePath, destFilePath string, a ...interfac
 	}
 }
 
-func (c *Client) UploadFile(sourceFilePath, remoteFilePath string, a ...interface{}) {
+func (c *Client) UploadFile(sourceFilePath, remoteFilePath string) {
 	session, err := c.client.NewSession()
 	if err != nil {
 		panic(err)
