@@ -19,9 +19,6 @@ func (c *Client) getAuthMethodPublicKeys() (sshCallback ssh.HostKeyCallback, aut
 	host := c.host
 	file, err := os.Open(filepath.Join(homeDir, ".ssh", "known_hosts"))
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
 		panic(err)
 	}
 	defer file.Close()

@@ -78,23 +78,13 @@ func (c *Client) connectPassword(finish chan bool) {
 func (c *Client) connect(finish chan bool) {
 	callback, method := c.getAuthMethodPublicKeys()
 	var config *ssh.ClientConfig
-	if method == nil {
-		config = &ssh.ClientConfig{
-			User: c.username,
-			Auth: []ssh.AuthMethod{
-				ssh.Password(c.password),
-			},
-		}
-	} else {
-		config = &ssh.ClientConfig{
-			User: c.username,
-			Auth: []ssh.AuthMethod{
-				method,
-				ssh.Password(c.password),
-			},
-			// Non-production only
-			HostKeyCallback: callback,
-		}
+	config = &ssh.ClientConfig{
+		User: c.username,
+		Auth: []ssh.AuthMethod{
+			method,
+			ssh.Password(c.password),
+		},
+		HostKeyCallback: callback,
 	}
 
 	// Connect to host
