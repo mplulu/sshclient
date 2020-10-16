@@ -35,9 +35,7 @@ func NewClient(username, password, host, port string) *Client {
 
 		stdout: &Writer{},
 	}
-	finish := make(chan bool)
-	go client.connect(finish)
-	<-finish
+	client.connect()
 	return client
 }
 
@@ -50,13 +48,11 @@ func NewClientPasswordAuth(username, password, host, port string) *Client {
 
 		stdout: &Writer{},
 	}
-	finish := make(chan bool)
-	go client.connectPassword(finish)
-	<-finish
+	client.connectPassword()
 	return client
 }
 
-func (c *Client) connectPassword(finish chan bool) {
+func (c *Client) connectPassword() {
 	// SSH client config
 	config := &ssh.ClientConfig{
 		User: c.username,
@@ -72,10 +68,9 @@ func (c *Client) connectPassword(finish chan bool) {
 		panic(err)
 	}
 	c.client = client
-	finish <- true
 }
 
-func (c *Client) connect(finish chan bool) {
+func (c *Client) connect() {
 	callback, method := c.getAuthMethodPublicKeys()
 	var config *ssh.ClientConfig
 	config = &ssh.ClientConfig{
@@ -93,7 +88,6 @@ func (c *Client) connect(finish chan bool) {
 		panic(err)
 	}
 	c.client = client
-	finish <- true
 }
 
 func (c *Client) createNewSession() *ssh.Session {
