@@ -178,9 +178,9 @@ func (c *Client) RunMultipleCmds(cmds []string, delayDuration time.Duration) {
 	if err != nil {
 		panic(err)
 	}
-
-	session.Stdout = os.Stdout
-	session.Stderr = os.Stdout
+	var stdOut stdOutSingleWriter
+	session.Stdout = &stdOut
+	session.Stderr = &stdOut
 
 	in, err := session.StdinPipe()
 	if err != nil {
@@ -221,14 +221,14 @@ func (c *Client) Output(cmd string) string {
 	session := c.createNewSession()
 	defer session.Close()
 
-	var stdoutBuf bytes.Buffer
+	var stdoutBuf singleWriter
 	session.Stdout = &stdoutBuf
 	session.Stderr = &stdoutBuf
 	err := session.Run(cmd)
 	if err != nil {
 		panic(err)
 	}
-	return strings.Replace(stdoutBuf.String(), "\r", "", -1)
+	return strings.Replace(stdoutBuf.b.String(), "\r", "", -1)
 	// return stdoutBuf.String()
 }
 
