@@ -426,6 +426,10 @@ func (c *Client) Exit() {
 	if err != nil {
 		panic(err)
 	}
+	err = c.client.Close()
+	if err != nil {
+		panic(err)
+	}
 	removeClientFromLog(c)
 }
 
