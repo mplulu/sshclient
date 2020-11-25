@@ -15,6 +15,13 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+var clientList []*Client
+
+func init() {
+	clientList = []*Client{}
+	go schedulePrintClientCount()
+}
+
 type Client struct {
 	client                         *ssh.Client
 	sess                           *ssh.Session
@@ -24,6 +31,8 @@ type Client struct {
 
 	stdinPipe  io.WriteCloser
 	stdoutPipe io.Reader
+
+	stackLog string
 }
 
 func NewClient(username, password, host, port string) *Client {
@@ -36,6 +45,8 @@ func NewClient(username, password, host, port string) *Client {
 		stdout: &Writer{},
 	}
 	client.connect()
+	client.stackLog = GetStack()
+	addClientToLog(client)
 	return client
 }
 
@@ -49,6 +60,8 @@ func NewClientPasswordAuth(username, password, host, port string) *Client {
 		stdout: &Writer{},
 	}
 	client.connectPassword()
+	client.stackLog = GetStack()
+	addClientToLog(client)
 	return client
 }
 
@@ -413,6 +426,7 @@ func (c *Client) Exit() {
 	if err != nil {
 		panic(err)
 	}
+	removeClientFromLog(c)
 }
 
 func SSHCopyId(username, password, host, port string) {
