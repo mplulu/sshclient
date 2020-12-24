@@ -103,9 +103,7 @@ func (w *PromptWriter) Write(p []byte) (n int, err error) {
 
 	n, err = os.Stdout.Write(p)
 	for index, suffix := range w.promptSuffixList {
-		fmt.Println("check", string(p), suffix)
 		if strings.HasSuffix(string(p), suffix) {
-			fmt.Println("has", w.promptAnswerList[index])
 			w.stdin.Write([]byte(w.promptAnswerList[index] + "\n"))
 			break
 		}

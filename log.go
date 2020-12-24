@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"runtime"
 	"sync"
-	"time"
 )
 
 var mutex sync.Mutex
@@ -17,13 +16,13 @@ func GetStack() string {
 }
 
 func schedulePrintClientCount() {
-	<-time.After(3 * time.Minute)
-	mutex.Lock()
-	defer mutex.Unlock()
-	fmt.Println("current active", len(clientList))
-	for _, client := range clientList {
-		fmt.Println("client", client.stackLog)
-	}
+	// <-time.After(3 * time.Minute)
+	// mutex.Lock()
+	// defer mutex.Unlock()
+	// fmt.Println("current active", len(clientList))
+	// for _, client := range clientList {
+	// 	fmt.Println("client", client.stackLog)
+	// }
 }
 
 func addClientToLog(client *Client) {
