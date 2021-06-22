@@ -23,9 +23,9 @@ func init() {
 }
 
 type Client struct {
-	client                         *ssh.Client
-	sess                           *ssh.Session
-	username, password, host, port string
+	client                                        *ssh.Client
+	sess                                          *ssh.Session
+	username, password, sshFolderPath, host, port string
 
 	stdout *Writer
 
@@ -41,6 +41,22 @@ func NewClient(username, password, host, port string) *Client {
 		password: password,
 		host:     host,
 		port:     port,
+
+		stdout: &Writer{},
+	}
+	client.connect()
+	client.stackLog = GetStack()
+	addClientToLog(client)
+	return client
+}
+
+func NewClientSSHKey(username, password, sshFolderPath, host, port string) *Client {
+	client := &Client{
+		username:      username,
+		password:      password,
+		sshFolderPath: sshFolderPath,
+		host:          host,
+		port:          port,
 
 		stdout: &Writer{},
 	}

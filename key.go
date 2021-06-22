@@ -12,12 +12,16 @@ import (
 )
 
 func (c *Client) getAuthMethodPublicKeys() (sshCallback ssh.HostKeyCallback, authMethod ssh.AuthMethod) {
-	homeDir := os.Getenv("HOME")
 
+	sshFolderPath := c.sshFolderPath
+	if sshFolderPath == "" {
+		homeDir := os.Getenv("HOME")
+		sshFolderPath = filepath.Join(homeDir, ".ssh")
+	}
 	// Every client must provide a host key check.  Here is a
 	// simple-minded parse of OpenSSH's known_hosts file
 	host := c.host
-	file, err := os.Open(filepath.Join(homeDir, ".ssh", "known_hosts"))
+	file, err := os.Open(filepath.Join(sshFolderPath, "known_hosts"))
 	if err != nil {
 		panic(err)
 	}
@@ -48,7 +52,7 @@ func (c *Client) getAuthMethodPublicKeys() (sshCallback ssh.HostKeyCallback, aut
 	//
 	// If you have an encrypted private key, the crypto/x509 package
 	// can be used to decrypt it.
-	key, err := ioutil.ReadFile(filepath.Join(homeDir, ".ssh", "id_rsa"))
+	key, err := ioutil.ReadFile(filepath.Join(sshFolderPath, "id_rsa"))
 	if err != nil {
 		log.Fatalf("unable to read private key: %v", err)
 	}
