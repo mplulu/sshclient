@@ -2,8 +2,8 @@ package sshclient
 
 import (
 	"bufio"
+	"errors"
 	"io/ioutil"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,7 +11,7 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-func (c *Client) getAuthMethodPublicKeys() (sshCallback ssh.HostKeyCallback, authMethod ssh.AuthMethod) {
+func (c *Client) getAuthMethodPublicKeys() (sshCallback ssh.HostKeyCallback, authMethod ssh.AuthMethod, err error) {
 
 	sshFolderPath := c.sshFolderPath
 	if sshFolderPath == "" {
@@ -23,7 +23,7 @@ func (c *Client) getAuthMethodPublicKeys() (sshCallback ssh.HostKeyCallback, aut
 	host := c.host
 	file, err := os.Open(filepath.Join(sshFolderPath, "known_hosts"))
 	if err != nil {
-		panic(err)
+		return nil, nil, err
 	}
 	defer file.Close()
 
@@ -38,14 +38,14 @@ func (c *Client) getAuthMethodPublicKeys() (sshCallback ssh.HostKeyCallback, aut
 			var err error
 			hostKey, _, _, _, err = ssh.ParseAuthorizedKey(scanner.Bytes())
 			if err != nil {
-				log.Fatalf("error parsing %q: %v", fields[2], err)
+				return nil, nil, err
 			}
 			break
 		}
 	}
 
 	if hostKey == nil {
-		log.Fatalf("no hostkey for %s", host)
+		return nil, nil, errors.New("no host key")
 	}
 	// A public key may be used to authenticate against the remote
 	// server by using an unencrypted PEM-encoded private key file.
@@ -54,14 +54,14 @@ func (c *Client) getAuthMethodPublicKeys() (sshCallback ssh.HostKeyCallback, aut
 	// can be used to decrypt it.
 	key, err := ioutil.ReadFile(filepath.Join(sshFolderPath, "id_rsa"))
 	if err != nil {
-		log.Fatalf("unable to read private key: %v", err)
+		return nil, nil, err
 	}
 
 	// Create the Signer for this private key.
 	signer, err := ssh.ParsePrivateKey(key)
 	if err != nil {
-		log.Fatalf("unable to parse private key: %v", err)
+		return nil, nil, err
 	}
 
-	return ssh.FixedHostKey(hostKey), ssh.PublicKeys(signer)
+	return ssh.FixedHostKey(hostKey), ssh.PublicKeys(signer), nil
 }

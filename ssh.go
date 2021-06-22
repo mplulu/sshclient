@@ -100,15 +100,23 @@ func (c *Client) connectPassword() {
 }
 
 func (c *Client) connect() {
-	callback, method := c.getAuthMethodPublicKeys()
+	authMethodList := []ssh.AuthMethod{
+		ssh.Password(c.password),
+	}
+	hostKeyCallback := ssh.InsecureIgnoreHostKey()
+
+	callback, method, err := c.getAuthMethodPublicKeys()
+	if err != nil {
+		fmt.Println("err auth %v", err)
+	} else {
+		authMethodList = append([]ssh.AuthMethod{method}, authMethodList...)
+		hostKeyCallback = callback
+	}
 	var config *ssh.ClientConfig
 	config = &ssh.ClientConfig{
-		User: c.username,
-		Auth: []ssh.AuthMethod{
-			method,
-			ssh.Password(c.password),
-		},
-		HostKeyCallback: callback,
+		User:            c.username,
+		Auth:            authMethodList,
+		HostKeyCallback: hostKeyCallback,
 	}
 
 	// Connect to host
