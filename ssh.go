@@ -23,9 +23,9 @@ func init() {
 }
 
 type Client struct {
-	client                                        *ssh.Client
-	sess                                          *ssh.Session
-	username, password, sshFolderPath, host, port string
+	client                                                   *ssh.Client
+	sess                                                     *ssh.Session
+	username, password, sshFolderPath, sshKeyPem, host, port string
 
 	stdout *Writer
 
@@ -57,6 +57,21 @@ func NewClientSSHKey(username, password, sshFolderPath, host, port string) *Clie
 		sshFolderPath: sshFolderPath,
 		host:          host,
 		port:          port,
+
+		stdout: &Writer{},
+	}
+	client.connect()
+	client.stackLog = GetStack()
+	addClientToLog(client)
+	return client
+}
+
+func NewClientSSHKeyPem(username, sshKeyPem, host, port string) *Client {
+	client := &Client{
+		username:  username,
+		sshKeyPem: sshKeyPem,
+		host:      host,
+		port:      port,
 
 		stdout: &Writer{},
 	}
@@ -107,7 +122,7 @@ func (c *Client) connect() {
 
 	callback, method, err := c.getAuthMethodPublicKeys()
 	if err != nil {
-		fmt.Println("err auth %v", err)
+		fmt.Println("err auth", err)
 	} else {
 		authMethodList = append([]ssh.AuthMethod{method}, authMethodList...)
 		hostKeyCallback = callback

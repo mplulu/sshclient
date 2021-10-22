@@ -3,6 +3,7 @@ package sshclient
 import (
 	"bufio"
 	"errors"
+	"fmt"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -45,14 +46,18 @@ func (c *Client) getAuthMethodPublicKeys() (sshCallback ssh.HostKeyCallback, aut
 	}
 
 	if hostKey == nil {
-		return nil, nil, errors.New("no host key")
+		return nil, nil, errors.New(fmt.Sprintf("no host key at %v", sshFolderPath))
 	}
 	// A public key may be used to authenticate against the remote
 	// server by using an unencrypted PEM-encoded private key file.
 	//
 	// If you have an encrypted private key, the crypto/x509 package
 	// can be used to decrypt it.
-	key, err := ioutil.ReadFile(filepath.Join(sshFolderPath, "id_rsa"))
+	keyFilePath := filepath.Join(sshFolderPath, "id_rsa")
+	if c.sshKeyPem != "" {
+		keyFilePath = c.sshKeyPem
+	}
+	key, err := ioutil.ReadFile(keyFilePath)
 	if err != nil {
 		return nil, nil, err
 	}
