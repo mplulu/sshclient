@@ -35,7 +35,7 @@ type Client struct {
 	stackLog string
 }
 
-func NewClient(username, password, host, port string) *Client {
+func NewClient(username, password, host, port string) (*Client, error) {
 	client := &Client{
 		username: username,
 		password: password,
@@ -44,13 +44,16 @@ func NewClient(username, password, host, port string) *Client {
 
 		stdout: &Writer{},
 	}
-	client.connect()
+	err := client.connect()
+	if err != nil {
+		return nil, err
+	}
 	client.stackLog = GetStack()
 	addClientToLog(client)
-	return client
+	return client, nil
 }
 
-func NewClientSSHKey(username, password, sshFolderPath, host, port string) *Client {
+func NewClientSSHKey(username, password, sshFolderPath, host, port string) (*Client, error) {
 	client := &Client{
 		username:      username,
 		password:      password,
@@ -60,13 +63,16 @@ func NewClientSSHKey(username, password, sshFolderPath, host, port string) *Clie
 
 		stdout: &Writer{},
 	}
-	client.connect()
+	err := client.connect()
+	if err != nil {
+		return nil, err
+	}
 	client.stackLog = GetStack()
 	addClientToLog(client)
-	return client
+	return client, nil
 }
 
-func NewClientSSHKeyPem(username, sshKeyPem, host, port string) *Client {
+func NewClientSSHKeyPem(username, sshKeyPem, host, port string) (*Client, error) {
 	client := &Client{
 		username:  username,
 		sshKeyPem: sshKeyPem,
@@ -75,13 +81,16 @@ func NewClientSSHKeyPem(username, sshKeyPem, host, port string) *Client {
 
 		stdout: &Writer{},
 	}
-	client.connect()
+	err := client.connect()
+	if err != nil {
+		return nil, err
+	}
 	client.stackLog = GetStack()
 	addClientToLog(client)
-	return client
+	return client, nil
 }
 
-func NewClientPasswordAuth(username, password, host, port string) *Client {
+func NewClientPasswordAuth(username, password, host, port string) (*Client, error) {
 	client := &Client{
 		username: username,
 		password: password,
@@ -90,13 +99,16 @@ func NewClientPasswordAuth(username, password, host, port string) *Client {
 
 		stdout: &Writer{},
 	}
-	client.connectPassword()
+	err := client.connectPassword()
+	if err != nil {
+		return nil, err
+	}
 	client.stackLog = GetStack()
 	addClientToLog(client)
-	return client
+	return client, nil
 }
 
-func (c *Client) connectPassword() {
+func (c *Client) connectPassword() error {
 	// SSH client config
 	config := &ssh.ClientConfig{
 		User: c.username,
@@ -109,12 +121,13 @@ func (c *Client) connectPassword() {
 	// Connect to host
 	client, err := ssh.Dial("tcp", fmt.Sprintf("%s:%s", c.host, c.port), config)
 	if err != nil {
-		panic(err)
+		return err
 	}
 	c.client = client
+	return nil
 }
 
-func (c *Client) connect() {
+func (c *Client) connect() error {
 	authMethodList := []ssh.AuthMethod{
 		ssh.Password(c.password),
 	}
@@ -137,9 +150,10 @@ func (c *Client) connect() {
 	// Connect to host
 	client, err := ssh.Dial("tcp", fmt.Sprintf("%s:%s", c.host, c.port), config)
 	if err != nil {
-		panic(err)
+		return err
 	}
 	c.client = client
+	return nil
 }
 
 func (c *Client) createNewSession() *ssh.Session {
@@ -481,7 +495,10 @@ func SSHCopyId(username, password, host, port string) {
 	if err != nil {
 		panic(err)
 	}
-	client := NewClient(username, password, host, port)
+	client, err := NewClient(username, password, host, port)
+	if err != nil {
+		panic(err)
+	}
 	client.Run("mkdir -p ~/.ssh")
 	client.AppendToFile(string(pubKeyContent), "~/.ssh/authorized_keys")
 	// set permission to rwx for owner only
