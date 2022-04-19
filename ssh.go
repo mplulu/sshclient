@@ -2,15 +2,20 @@ package sshclient
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
+	"net"
 	"os"
 	"os/user"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/crypto/ssh/knownhosts"
 
 	"golang.org/x/crypto/ssh"
 )
@@ -26,6 +31,7 @@ type Client struct {
 	client                                                   *ssh.Client
 	sess                                                     *ssh.Session
 	username, password, sshFolderPath, sshKeyPem, host, port string
+	knownHost                                                bool
 
 	stdout *Writer
 
@@ -131,20 +137,37 @@ func (c *Client) connect() error {
 	authMethodList := []ssh.AuthMethod{
 		ssh.Password(c.password),
 	}
-	hostKeyCallback := ssh.InsecureIgnoreHostKey()
 
-	callback, method, err := c.getAuthMethodPublicKeys()
+	method, err := c.getAuthMethodPublicKeys()
 	if err != nil {
-		fmt.Println("err auth", err)
+		panic(err)
 	} else {
 		authMethodList = append([]ssh.AuthMethod{method}, authMethodList...)
-		hostKeyCallback = callback
 	}
 	var config *ssh.ClientConfig
 	config = &ssh.ClientConfig{
-		User:            c.username,
-		Auth:            authMethodList,
-		HostKeyCallback: hostKeyCallback,
+		User: c.username,
+		Auth: authMethodList,
+		HostKeyCallback: ssh.HostKeyCallback(func(host string, remote net.Addr, pubKey ssh.PublicKey) error {
+			kh := c.checkKnownHosts()
+			hErr := kh(host, remote, pubKey)
+			var keyErr *knownhosts.KeyError
+			// Reference: https://blog.golang.org/go1.13-errors
+			// To understand what errors.As is.
+			if errors.As(hErr, &keyErr) && len(keyErr.Want) > 0 {
+				// Reference: https://www.godoc.org/golang.org/x/crypto/ssh/knownhosts#KeyError
+				// if keyErr.Want slice is empty then host is unknown, if keyErr.Want is not empty
+				// and if host is known then there is key mismatch the connection is then rejected.
+				log.Printf("WARNING: %v is not a key of %s, either a MiTM attack or %s has reconfigured the host pub key.", string(pubKey.Marshal()), host, host)
+				return keyErr
+			} else if errors.As(hErr, &keyErr) && len(keyErr.Want) == 0 {
+				// host key not found in known_hosts then give a warning and continue to connect.
+				log.Printf("WARNING: %s is not trusted, adding this key: %q to known_hosts file.", host, string(pubKey.Marshal()))
+				return c.addHostKey(host, remote, pubKey)
+			}
+			log.Printf("Pub key exists for %s.", host)
+			return nil
+		}),
 	}
 
 	// Connect to host
