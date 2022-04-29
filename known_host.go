@@ -30,8 +30,7 @@ func (c *Client) checkKnownHosts() ssh.HostKeyCallback {
 func (c *Client) addHostKey(host string, remote net.Addr, pubKey ssh.PublicKey) error {
 	// add host key if host is not found in known_hosts, error object is return, if nil then connection proceeds,
 	// if not nil then connection stops.
-	khFilePath := filepath.Join(c.sshFolderPath, "known_hosts")
-
+	khFilePath := filepath.Join(c.getSSHFolderPath(), "known_hosts")
 	f, fErr := os.OpenFile(khFilePath, os.O_APPEND|os.O_WRONLY, 0600)
 	if fErr != nil {
 		return fErr
