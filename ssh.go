@@ -20,6 +20,12 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+var SSHFolderPathPackage string
+
+func SetSSHFolderPath(sshFolderPath string) {
+	SSHFolderPathPackage = sshFolderPath
+}
+
 var clientList []*Client
 
 func init() {

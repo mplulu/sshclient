@@ -46,8 +46,12 @@ func (c *Client) addHostKey(host string, remote net.Addr, pubKey ssh.PublicKey) 
 func (c *Client) getSSHFolderPath() string {
 	sshFolderPath := c.sshFolderPath
 	if sshFolderPath == "" {
-		homeDir := os.Getenv("HOME")
-		sshFolderPath = filepath.Join(homeDir, ".ssh")
+		sshFolderPath = SSHFolderPathPackage
+		if sshFolderPath == "" {
+			homeDir := os.Getenv("HOME")
+			sshFolderPath = filepath.Join(homeDir, ".ssh")
+		}
+
 	}
 	return sshFolderPath
 }
