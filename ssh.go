@@ -498,7 +498,20 @@ func (c *Client) UploadFile(sourceFilePath, remoteFilePath string) {
 		panic(err)
 	}
 	wg.Wait()
+}
 
+func (c *Client) WriteBigFile(content string, remoteFilePath string) {
+	randFileName := RandSeq(5)
+	tempFilePath := fmt.Sprintf("/tmp/%v.tmp", randFileName)
+	err := ioutil.WriteFile(tempFilePath, []byte(content), 0777)
+	if err != nil {
+		panic(err)
+	}
+	c.UploadFile(tempFilePath, remoteFilePath)
+	err = os.Remove(tempFilePath)
+	if err != nil {
+		panic(err)
+	}
 }
 
 func (c *Client) Exit() {
