@@ -501,7 +501,7 @@ func (c *Client) UploadFile(sourceFilePath, remoteFilePath string) {
 }
 
 func (c *Client) WriteBigFile(content string, remoteFilePath string) {
-	randFileName := RandSeq(5)
+	randFileName := RandSeq(15)
 	tempFilePath := fmt.Sprintf("/tmp/%v.tmp", randFileName)
 	err := ioutil.WriteFile(tempFilePath, []byte(content), 0777)
 	if err != nil {
@@ -515,14 +515,16 @@ func (c *Client) WriteBigFile(content string, remoteFilePath string) {
 }
 
 func (c *Client) SUDOWriteBigFile(content string, remoteFilePath string) {
-	randFileName := RandSeq(5)
+	randFileName := RandSeq(15)
 	tempFilePath := fmt.Sprintf("/tmp/%v.tmp", randFileName)
 	err := ioutil.WriteFile(tempFilePath, []byte(content), 0777)
 	if err != nil {
 		panic(err)
 	}
-	c.UploadFile(tempFilePath, tempFilePath)
-	c.SUDORun("mv %v %v", tempFilePath, remoteFilePath)
+	randFileNameDest := RandSeq(15)
+	tempFilePathDest := fmt.Sprintf("/tmp/%v.tmp", randFileNameDest)
+	c.UploadFile(tempFilePath, tempFilePathDest)
+	c.SUDORun("mv %v %v", tempFilePathDest, remoteFilePath)
 	err = os.Remove(tempFilePath)
 	if err != nil {
 		panic(err)
