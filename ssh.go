@@ -525,10 +525,6 @@ func (c *Client) SUDOWriteBigFile(content string, remoteFilePath string) {
 	tempFilePathDest := fmt.Sprintf("/tmp/%v.tmp", randFileNameDest)
 	c.UploadFile(tempFilePath, tempFilePathDest)
 	c.SUDORun("mv %v %v", tempFilePathDest, remoteFilePath)
-	err = os.Remove(tempFilePath)
-	if err != nil {
-		panic(err)
-	}
 }
 
 func (c *Client) Exit() {
