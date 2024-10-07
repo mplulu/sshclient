@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"log"
 	"net"
 	"os"
 	"os/user"
@@ -164,14 +163,14 @@ func (c *Client) connect() error {
 				// Reference: https://www.godoc.org/golang.org/x/crypto/ssh/knownhosts#KeyError
 				// if keyErr.Want slice is empty then host is unknown, if keyErr.Want is not empty
 				// and if host is known then there is key mismatch the connection is then rejected.
-				log.Printf("WARNING: %v is not a key of %s, either a MiTM attack or %s has reconfigured the host pub key.", string(pubKey.Marshal()), host, host)
+				Log("WARNING: %v is not a key of %s, either a MiTM attack or %s has reconfigured the host pub key.", string(pubKey.Marshal()), host, host)
 				return keyErr
 			} else if errors.As(hErr, &keyErr) && len(keyErr.Want) == 0 {
 				// host key not found in known_hosts then give a warning and continue to connect.
-				log.Printf("WARNING: %s is not trusted, adding this key: %q to known_hosts file.", host, string(pubKey.Marshal()))
+				Log("WARNING: %s is not trusted, adding this key: %q to known_hosts file.", host, string(pubKey.Marshal()))
 				return c.addHostKey(host, remote, pubKey)
 			}
-			log.Printf("Pub key exists for %s.", host)
+			Log("Pub key exists for %s.", host)
 			return nil
 		}),
 	}

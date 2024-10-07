@@ -4,9 +4,22 @@ import (
 	"fmt"
 	"runtime"
 	"sync"
+	"time"
+)
+
+const (
+	FormatTime string = "02/01/2006 15:04:05.999999-07:00"
 )
 
 var mutex sync.Mutex
+
+func Log(format string, a ...interface{}) string {
+	logStr := fmt.Sprintf(format, a...)
+	logStr = fmt.Sprintf("Info <%s>: %s", time.Now().Format(FormatTime), logStr)
+	fmt.Println(logStr)
+
+	return logStr
+}
 
 func GetStack() string {
 	trace := make([]byte, 8192)
