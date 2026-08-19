@@ -2,19 +2,15 @@ package sshclient
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
-	"net"
 	"os"
 	"os/user"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
-
-	"golang.org/x/crypto/ssh/knownhosts"
 
 	"golang.org/x/crypto/ssh"
 )
@@ -149,34 +145,15 @@ func (c *Client) connect() error {
 	} else {
 		authMethodList = append([]ssh.AuthMethod{method}, authMethodList...)
 	}
-	var config *ssh.ClientConfig
-	config = &ssh.ClientConfig{
-		User: c.username,
-		Auth: authMethodList,
-		HostKeyCallback: ssh.HostKeyCallback(func(host string, remote net.Addr, pubKey ssh.PublicKey) error {
-			kh := c.checkKnownHosts()
-			hErr := kh(host, remote, pubKey)
-			var keyErr *knownhosts.KeyError
-			// Reference: https://blog.golang.org/go1.13-errors
-			// To understand what errors.As is.
-			if errors.As(hErr, &keyErr) && len(keyErr.Want) > 0 {
-				// Reference: https://www.godoc.org/golang.org/x/crypto/ssh/knownhosts#KeyError
-				// if keyErr.Want slice is empty then host is unknown, if keyErr.Want is not empty
-				// and if host is known then there is key mismatch the connection is then rejected.
-				Log("WARNING: %v is not a key of %s, either a MiTM attack or %s has reconfigured the host pub key.", string(pubKey.Marshal()), host, host)
-				return keyErr
-			} else if errors.As(hErr, &keyErr) && len(keyErr.Want) == 0 {
-				// host key not found in known_hosts then give a warning and continue to connect.
-				Log("WARNING: %s is not trusted, adding this key: %q to known_hosts file.", host, string(pubKey.Marshal()))
-				return c.addHostKey(host, remote, pubKey)
-			}
-			Log("Pub key exists for %s.", host)
-			return nil
-		}),
+	addr := fmt.Sprintf("%s:%s", c.host, c.port)
+	config := &ssh.ClientConfig{
+		User:              c.username,
+		Auth:              authMethodList,
+		HostKeyCallback:   c.hostKeyCallback,
+		HostKeyAlgorithms: c.hostKeyAlgorithms(addr),
 	}
 
-	// Connect to host
-	client, err := ssh.Dial("tcp", fmt.Sprintf("%s:%s", c.host, c.port), config)
+	client, err := ssh.Dial("tcp", addr, config)
 	if err != nil {
 		return err
 	}

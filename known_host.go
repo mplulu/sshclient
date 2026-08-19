@@ -1,14 +1,35 @@
 package sshclient
 
 import (
+	"encoding/base64"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
 )
+
+var knownHostsMu sync.Mutex
+
+type fakePublicKey struct{}
+
+func (k *fakePublicKey) Type() string {
+	return "fake-key-type"
+}
+
+func (k *fakePublicKey) Marshal() []byte {
+	return []byte("fake-key")
+}
+
+func (k *fakePublicKey) Verify(data []byte, sig *ssh.Signature) error {
+	return errors.New("fake public key")
+}
 
 func (c *Client) createKnownHosts() {
 	f, err := os.OpenFile(filepath.Join(c.getSSHFolderPath(), "known_hosts"), os.O_CREATE, 0600)
@@ -27,18 +48,168 @@ func (c *Client) checkKnownHosts() ssh.HostKeyCallback {
 	return kh
 }
 
-func (c *Client) addHostKey(host string, remote net.Addr, pubKey ssh.PublicKey) error {
-	// add host key if host is not found in known_hosts, error object is return, if nil then connection proceeds,
-	// if not nil then connection stops.
+func (c *Client) hostKeyAlgorithms(hostWithPort string) []string {
+	knownHostsMu.Lock()
+	defer knownHostsMu.Unlock()
+
+	return hostKeyAlgorithmsFromCallback(c.checkKnownHosts(), hostWithPort)
+}
+
+func hostKeyAlgorithmsFromCallback(kh ssh.HostKeyCallback, hostWithPort string) []string {
+	dummy := &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 22}
+	err := kh(hostWithPort, dummy, &fakePublicKey{})
+	if err == nil {
+		return nil
+	}
+	var keyErr *knownhosts.KeyError
+	if !errors.As(err, &keyErr) || len(keyErr.Want) == 0 {
+		return nil
+	}
+
+	seen := map[string]bool{}
+	algos := []string{}
+	for _, known := range keyErr.Want {
+		for _, algo := range algorithmsForKeyType(known.Key.Type()) {
+			if seen[algo] {
+				continue
+			}
+			seen[algo] = true
+			algos = append(algos, algo)
+		}
+	}
+	if len(algos) == 0 {
+		return nil
+	}
+	return algos
+}
+
+func algorithmsForKeyType(keyType string) []string {
+	if keyType == ssh.KeyAlgoRSA {
+		return []string{ssh.KeyAlgoRSASHA256, ssh.KeyAlgoRSASHA512, ssh.KeyAlgoRSA}
+	}
+	return []string{keyType}
+}
+
+func (c *Client) hostKeyCallback(host string, remote net.Addr, pubKey ssh.PublicKey) error {
+	knownHostsMu.Lock()
+	defer knownHostsMu.Unlock()
+
+	c.createKnownHosts()
 	khFilePath := filepath.Join(c.getSSHFolderPath(), "known_hosts")
-	f, fErr := os.OpenFile(khFilePath, os.O_APPEND|os.O_WRONLY, 0600)
-	if fErr != nil {
-		return fErr
+	f, err := os.OpenFile(khFilePath, os.O_RDWR|os.O_CREATE, 0600)
+	if err != nil {
+		return err
 	}
 	defer f.Close()
+	if err := lockKnownHostsFile(f); err != nil {
+		return err
+	}
+	defer unlockKnownHostsFile(f)
 
-	knownHosts := knownhosts.Normalize(remote.String())
-	_, fileErr := f.WriteString(fmt.Sprintf("%v\n", knownhosts.Line([]string{knownHosts}, pubKey)))
+	kh := c.checkKnownHosts()
+	hErr := kh(host, remote, pubKey)
+	if hErr == nil {
+		Log("Pub key exists for %s.", host)
+		return nil
+	}
+
+	var keyErr *knownhosts.KeyError
+	if !errors.As(hErr, &keyErr) {
+		return hErr
+	}
+
+	if len(keyErr.Want) > 0 {
+		Log("WARNING: %v is not a key of %s, either a MiTM attack or %s has reconfigured the host pub key.", string(pubKey.Marshal()), host, host)
+		return keyErr
+	}
+
+	Log("WARNING: %s is not trusted, adding this key: %q to known_hosts file.", host, string(pubKey.Marshal()))
+	return c.appendHostKey(f, host, remote, pubKey)
+}
+
+func uniqueKnownHostsAddrs(host string, remote net.Addr) []string {
+	seen := map[string]bool{}
+	addrs := []string{}
+	appendAddr := func(addr string) {
+		if addr == "" {
+			return
+		}
+		normalized := knownhosts.Normalize(addr)
+		if normalized == "" || seen[normalized] {
+			return
+		}
+		seen[normalized] = true
+		addrs = append(addrs, normalized)
+	}
+	appendAddr(host)
+	if remote != nil {
+		appendAddr(remote.String())
+	}
+	return addrs
+}
+
+func serializedHostKey(pubKey ssh.PublicKey) string {
+	return pubKey.Type() + " " + base64.StdEncoding.EncodeToString(pubKey.Marshal())
+}
+
+func hostKeyAlreadyStored(existing string, addrs []string, pubKey ssh.PublicKey) bool {
+	line := knownhosts.Line(addrs, pubKey)
+	keyPart := serializedHostKey(pubKey)
+	addrSet := map[string]bool{}
+	for _, addr := range addrs {
+		addrSet[addr] = true
+	}
+
+	for _, existingLine := range strings.Split(existing, "\n") {
+		existingLine = strings.TrimSpace(existingLine)
+		if existingLine == "" || strings.HasPrefix(existingLine, "#") {
+			continue
+		}
+		if existingLine == line {
+			return true
+		}
+
+		fields := strings.Fields(existingLine)
+		if len(fields) < 3 {
+			continue
+		}
+		if strings.HasPrefix(fields[0], "@") || strings.HasPrefix(fields[0], "|") {
+			continue
+		}
+		if fields[1]+" "+fields[2] != keyPart {
+			continue
+		}
+		for _, existingHost := range strings.Split(fields[0], ",") {
+			if addrSet[existingHost] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (c *Client) appendHostKey(f *os.File, host string, remote net.Addr, pubKey ssh.PublicKey) error {
+	addrs := uniqueKnownHostsAddrs(host, remote)
+	if len(addrs) == 0 {
+		return nil
+	}
+
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	existing, err := io.ReadAll(f)
+	if err != nil {
+		return err
+	}
+	if hostKeyAlreadyStored(string(existing), addrs, pubKey) {
+		return nil
+	}
+
+	line := knownhosts.Line(addrs, pubKey)
+	if _, err := f.Seek(0, io.SeekEnd); err != nil {
+		return err
+	}
+	_, fileErr := f.WriteString(fmt.Sprintf("%v\n", line))
 	return fileErr
 }
 
