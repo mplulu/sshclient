@@ -21,6 +21,10 @@ func Log(format string, a ...interface{}) string {
 	return logStr
 }
 
+func sshPrint(msg string) {
+	fmt.Println("ssh", msg, time.Now().Format(FormatTime))
+}
+
 func GetStack() string {
 	trace := make([]byte, 8192)
 	count := runtime.Stack(trace, false)

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
@@ -40,24 +41,39 @@ func (c *Client) createKnownHosts() {
 }
 
 func (c *Client) checkKnownHosts() ssh.HostKeyCallback {
+	start := time.Now()
+	sshPrint("checkKnownHosts start")
 	c.createKnownHosts()
+	parseStart := time.Now()
+	sshPrint("knownhosts.New start")
 	kh, err := knownhosts.New(filepath.Join(c.getSSHFolderPath(), "known_hosts"))
+	sshPrint(fmt.Sprintf("knownhosts.New done took %s", time.Since(parseStart)))
 	if err != nil {
 		panic(err)
 	}
+	sshPrint(fmt.Sprintf("checkKnownHosts done took %s", time.Since(start)))
 	return kh
 }
 
 func (c *Client) hostKeyAlgorithms(hostWithPort string) []string {
+	start := time.Now()
+	sshPrint("hostKeyAlgorithms lock start")
 	knownHostsMu.Lock()
+	sshPrint(fmt.Sprintf("hostKeyAlgorithms lock done took %s", time.Since(start)))
 	defer knownHostsMu.Unlock()
 
 	return hostKeyAlgorithmsFromCallback(c.checkKnownHosts(), hostWithPort)
 }
 
 func hostKeyAlgorithmsFromCallback(kh ssh.HostKeyCallback, hostWithPort string) []string {
+	start := time.Now()
+	sshPrint("hostKeyAlgorithmsFromCallback start")
+	defer func() {
+		sshPrint(fmt.Sprintf("hostKeyAlgorithmsFromCallback done took %s", time.Since(start)))
+	}()
 	dummy := &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 22}
 	err := kh(hostWithPort, dummy, &fakePublicKey{})
+	sshPrint(fmt.Sprintf("hostKeyAlgorithmsFromCallback lookup took %s", time.Since(start)))
 	if err == nil {
 		return nil
 	}
@@ -91,7 +107,15 @@ func algorithmsForKeyType(keyType string) []string {
 }
 
 func (c *Client) hostKeyCallback(host string, remote net.Addr, pubKey ssh.PublicKey) error {
+	start := time.Now()
+	sshPrint("hostKeyCallback start")
+	defer func() {
+		sshPrint(fmt.Sprintf("hostKeyCallback done took %s", time.Since(start)))
+	}()
+	lockStart := time.Now()
+	sshPrint("hostKeyCallback mutex lock start")
 	knownHostsMu.Lock()
+	sshPrint(fmt.Sprintf("hostKeyCallback mutex lock done took %s", time.Since(lockStart)))
 	defer knownHostsMu.Unlock()
 
 	c.createKnownHosts()
@@ -101,13 +125,19 @@ func (c *Client) hostKeyCallback(host string, remote net.Addr, pubKey ssh.Public
 		return err
 	}
 	defer f.Close()
+	flockStart := time.Now()
+	sshPrint("lockKnownHostsFile start")
 	if err := lockKnownHostsFile(f); err != nil {
 		return err
 	}
+	sshPrint(fmt.Sprintf("lockKnownHostsFile done took %s", time.Since(flockStart)))
 	defer unlockKnownHostsFile(f)
 
 	kh := c.checkKnownHosts()
+	lookupStart := time.Now()
+	sshPrint("known_hosts lookup start")
 	hErr := kh(host, remote, pubKey)
+	sshPrint(fmt.Sprintf("known_hosts lookup done took %s", time.Since(lookupStart)))
 	if hErr == nil {
 		Log("Pub key exists for %s.", host)
 		return nil
@@ -124,7 +154,11 @@ func (c *Client) hostKeyCallback(host string, remote net.Addr, pubKey ssh.Public
 	}
 
 	Log("WARNING: %s is not trusted, adding this key: %q to known_hosts file.", host, string(pubKey.Marshal()))
-	return c.appendHostKey(f, host, remote, pubKey)
+	appendStart := time.Now()
+	sshPrint("appendHostKey start")
+	err = c.appendHostKey(f, host, remote, pubKey)
+	sshPrint(fmt.Sprintf("appendHostKey done took %s", time.Since(appendStart)))
+	return err
 }
 
 func uniqueKnownHostsAddrs(host string, remote net.Addr) []string {

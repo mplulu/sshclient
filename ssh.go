@@ -61,6 +61,8 @@ func NewClient(username, password, host, port string) (*Client, error) {
 }
 
 func NewClientSSHKey(username, password, sshFolderPath, host, port string) (*Client, error) {
+	start := time.Now()
+	sshPrint("NewClientSSHKey start")
 	client := &Client{
 		username:      username,
 		password:      password,
@@ -72,10 +74,12 @@ func NewClientSSHKey(username, password, sshFolderPath, host, port string) (*Cli
 	}
 	err := client.connect()
 	if err != nil {
+		sshPrint(fmt.Sprintf("NewClientSSHKey error took %s", time.Since(start)))
 		return nil, err
 	}
 	client.stackLog = GetStack()
 	addClientToLog(client)
+	sshPrint(fmt.Sprintf("NewClientSSHKey done took %s", time.Since(start)))
 	return client, nil
 }
 
@@ -135,34 +139,53 @@ func (c *Client) connectPassword() error {
 }
 
 func (c *Client) connect() error {
+	start := time.Now()
+	sshPrint("connect start")
 	authMethodList := []ssh.AuthMethod{
 		ssh.Password(c.password),
 	}
 
+	authStart := time.Now()
+	sshPrint("getAuthMethodPublicKeys start")
 	method, err := c.getAuthMethodPublicKeys()
 	if err != nil {
 		panic(err)
 	} else {
 		authMethodList = append([]ssh.AuthMethod{method}, authMethodList...)
 	}
+	sshPrint(fmt.Sprintf("getAuthMethodPublicKeys done took %s", time.Since(authStart)))
 	addr := fmt.Sprintf("%s:%s", c.host, c.port)
+	algoStart := time.Now()
+	sshPrint("hostKeyAlgorithms start")
+	algos := c.hostKeyAlgorithms(addr)
+	sshPrint(fmt.Sprintf("hostKeyAlgorithms done took %s", time.Since(algoStart)))
 	config := &ssh.ClientConfig{
 		User:              c.username,
 		Auth:              authMethodList,
 		HostKeyCallback:   c.hostKeyCallback,
-		HostKeyAlgorithms: c.hostKeyAlgorithms(addr),
+		HostKeyAlgorithms: algos,
 	}
 
+	dialStart := time.Now()
+	sshPrint("ssh.Dial start")
 	client, err := ssh.Dial("tcp", addr, config)
+	sshPrint(fmt.Sprintf("ssh.Dial done took %s", time.Since(dialStart)))
 	if err != nil {
+		sshPrint(fmt.Sprintf("connect error took %s", time.Since(start)))
 		return err
 	}
 	c.client = client
+	sshPrint(fmt.Sprintf("connect done took %s", time.Since(start)))
 	return nil
 }
 
 func (c *Client) createNewSession() *ssh.Session {
+	start := time.Now()
+	sshPrint("createNewSession start")
+	sessionStart := time.Now()
+	sshPrint("NewSession start")
 	session, err := c.client.NewSession()
+	sshPrint(fmt.Sprintf("NewSession done took %s", time.Since(sessionStart)))
 	if err != nil {
 		panic(err)
 	}
@@ -173,12 +196,18 @@ func (c *Client) createNewSession() *ssh.Session {
 		ssh.TTY_OP_OSPEED: 14400, // output speed = 14.4kbaud
 		ssh.OPOST:         0,
 	}
+	ptyStart := time.Now()
+	sshPrint("RequestPty start")
 	err = session.RequestPty("xterm", 80, 40, modes)
+	sshPrint(fmt.Sprintf("RequestPty done took %s", time.Since(ptyStart)))
 	if err != nil {
 		panic(err)
 	}
 
+	pipeStart := time.Now()
+	sshPrint("StdinPipe start")
 	in, err := session.StdinPipe()
+	sshPrint(fmt.Sprintf("StdinPipe done took %s", time.Since(pipeStart)))
 	if err != nil {
 		panic(err)
 	}
@@ -187,6 +216,7 @@ func (c *Client) createNewSession() *ssh.Session {
 	session.Stdout = writer
 	session.Stderr = writer
 
+	sshPrint(fmt.Sprintf("createNewSession done took %s", time.Since(start)))
 	return session
 }
 
@@ -289,16 +319,22 @@ func (c *Client) PromptRun(suffixList, answerList []string, cmd string, a ...int
 }
 
 func (c *Client) Output(cmd string) string {
+	start := time.Now()
+	sshPrint(fmt.Sprintf("Output start cmd=%s", cmd))
 	session := c.createNewSession()
 	defer session.Close()
 
 	var stdoutBuf singleWriter
 	session.Stdout = &stdoutBuf
 	session.Stderr = &stdoutBuf
+	runStart := time.Now()
+	sshPrint("session.Run start")
 	err := session.Run(cmd)
+	sshPrint(fmt.Sprintf("session.Run done took %s", time.Since(runStart)))
 	if err != nil {
 		panic(err)
 	}
+	sshPrint(fmt.Sprintf("Output done took %s", time.Since(start)))
 	return strings.Replace(stdoutBuf.b.String(), "\r", "", -1)
 	// return stdoutBuf.String()
 }
@@ -504,17 +540,26 @@ func (c *Client) SUDOWriteBigFile(content string, remoteFilePath string) {
 }
 
 func (c *Client) Exit() {
+	start := time.Now()
+	sshPrint("Exit start")
 	session := c.createNewSession()
 	defer session.Close()
+	runStart := time.Now()
+	sshPrint("Exit session.Run start")
 	err := session.Run("exit")
+	sshPrint(fmt.Sprintf("Exit session.Run done took %s", time.Since(runStart)))
 	if err != nil {
 		panic(err)
 	}
+	closeStart := time.Now()
+	sshPrint("client.Close start")
 	err = c.client.Close()
+	sshPrint(fmt.Sprintf("client.Close done took %s", time.Since(closeStart)))
 	if err != nil {
 		panic(err)
 	}
 	removeClientFromLog(c)
+	sshPrint(fmt.Sprintf("Exit done took %s", time.Since(start)))
 }
 
 func SSHCopyId(username, password, host, port string) {
