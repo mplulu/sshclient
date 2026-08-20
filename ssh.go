@@ -9,7 +9,6 @@ import (
 	"os/user"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -181,7 +180,7 @@ func (c *Client) connect() error {
 
 func (c *Client) createNewSession() *ssh.Session {
 	start := time.Now()
-	sshPrint("createNewSession start")
+	sshPrint(fmt.Sprintf("createNewSession start caller=%s", sshCaller(2)))
 	sessionStart := time.Now()
 	sshPrint("NewSession start")
 	session, err := c.client.NewSession()
@@ -221,12 +220,19 @@ func (c *Client) createNewSession() *ssh.Session {
 }
 
 func (c *Client) Run(cmd string, a ...interface{}) {
+	start := time.Now()
+	fullCmd := fmt.Sprintf(cmd, a...)
+	sshPrint(fmt.Sprintf("Run start cmd=%s", fullCmd))
 	session := c.createNewSession()
 	defer session.Close()
-	err := session.Run(fmt.Sprintf(cmd, a...))
+	runStart := time.Now()
+	sshPrint("Run session.Run start")
+	err := session.Run(fullCmd)
+	sshPrint(fmt.Sprintf("Run session.Run done took %s", time.Since(runStart)))
 	if err != nil {
 		panic(err)
 	}
+	sshPrint(fmt.Sprintf("Run done took %s", time.Since(start)))
 }
 
 func (c *Client) RunYes(cmd string, a ...interface{}) {
@@ -350,22 +356,35 @@ func (c *Client) OutputIgnoreError(cmd string) string {
 }
 
 func (c *Client) SUDORun(cmd string, a ...interface{}) {
+	start := time.Now()
+	fullCmd := fmt.Sprintf("sudo %s", fmt.Sprintf(cmd, a...))
+	sshPrint(fmt.Sprintf("SUDORun start cmd=%s", fullCmd))
 	session := c.createNewSession()
 	defer session.Close()
-	err := session.Run(fmt.Sprintf("sudo %s", fmt.Sprintf(cmd, a...)))
+	runStart := time.Now()
+	sshPrint("SUDORun session.Run start")
+	err := session.Run(fullCmd)
+	sshPrint(fmt.Sprintf("SUDORun session.Run done took %s", time.Since(runStart)))
 	if err != nil {
 		panic(err)
 	}
+	sshPrint(fmt.Sprintf("SUDORun done took %s", time.Since(start)))
 }
 
 func (c *Client) SUDOWriteToFile(content, filePath string) {
+	start := time.Now()
+	sshPrint(fmt.Sprintf("SUDOWriteToFile start path=%s size=%d", filePath, len(content)))
 	session := c.createNewSession()
 	defer session.Close()
 	cmd := fmt.Sprintf("cat <<'EOF' | sudo tee %s\n%s\nEOF\n", filePath, content)
+	runStart := time.Now()
+	sshPrint("SUDOWriteToFile session.Run start")
 	err := session.Run(cmd)
+	sshPrint(fmt.Sprintf("SUDOWriteToFile session.Run done took %s", time.Since(runStart)))
 	if err != nil {
 		panic(err)
 	}
+	sshPrint(fmt.Sprintf("SUDOWriteToFile done took %s", time.Since(start)))
 }
 
 func (c *Client) WriteToFile(content, filePath string) {
@@ -468,6 +487,8 @@ func (c *Client) DownloadFile(remoteFilePath, destFilePath string) {
 }
 
 func (c *Client) UploadFile(sourceFilePath, remoteFilePath string) {
+	start := time.Now()
+	sshPrint(fmt.Sprintf("UploadFile start %s -> %s", sourceFilePath, remoteFilePath))
 	session, err := c.client.NewSession()
 	if err != nil {
 		panic(err)
@@ -475,7 +496,7 @@ func (c *Client) UploadFile(sourceFilePath, remoteFilePath string) {
 	defer session.Close()
 
 	remoteDir := fmt.Sprintf("%s/", filepath.Dir(remoteFilePath))
-	remoteFileName := strings.TrimPrefix(remoteFilePath, remoteDir)
+	remoteFileName := filepath.Base(remoteFilePath)
 
 	file, err := os.Open(sourceFilePath)
 	if err != nil {
@@ -487,29 +508,70 @@ func (c *Client) UploadFile(sourceFilePath, remoteFilePath string) {
 		panic(err)
 	}
 
-	wg := sync.WaitGroup{}
-	wg.Add(1)
-	go func() {
-		hostIn, err := session.StdinPipe()
-		if err != nil {
-			panic(err)
-		}
-		defer hostIn.Close()
-		fmt.Fprintf(hostIn, "C0664 %d %s\n", stat.Size(), remoteFileName)
-
-		_, err = io.Copy(hostIn, file)
-		if err != nil {
-			panic(err)
-		}
-		fmt.Fprint(hostIn, "\x00")
-		wg.Done()
-	}()
-	cmd := fmt.Sprintf("/usr/bin/scp -t %s", remoteDir)
-	err = session.Run(cmd)
+	hostIn, err := session.StdinPipe()
 	if err != nil {
 		panic(err)
 	}
-	wg.Wait()
+
+	var stderrBuf bytes.Buffer
+	session.Stderr = &stderrBuf
+
+	cmd := fmt.Sprintf("/usr/bin/scp -t %s", remoteDir)
+	runStart := time.Now()
+	sshPrint("UploadFile scp start")
+	err = session.Start(cmd)
+	if err != nil {
+		panic(wrapUploadErr(sourceFilePath, remoteFilePath, err, stderrBuf.String()))
+	}
+
+	_, err = fmt.Fprintf(hostIn, "C0664 %d %s\n", stat.Size(), remoteFileName)
+	if err != nil {
+		hostIn.Close()
+		waitErr := session.Wait()
+		panic(wrapUploadErr(sourceFilePath, remoteFilePath, firstErr(err, waitErr), stderrBuf.String()))
+	}
+	_, err = io.CopyN(hostIn, file, stat.Size())
+	if err != nil {
+		hostIn.Close()
+		waitErr := session.Wait()
+		panic(wrapUploadErr(sourceFilePath, remoteFilePath, firstErr(err, waitErr), stderrBuf.String()))
+	}
+	_, err = fmt.Fprint(hostIn, "\x00")
+	if err != nil {
+		hostIn.Close()
+		waitErr := session.Wait()
+		panic(wrapUploadErr(sourceFilePath, remoteFilePath, firstErr(err, waitErr), stderrBuf.String()))
+	}
+	hostIn.Close()
+
+	err = session.Wait()
+	sshPrint(fmt.Sprintf("UploadFile scp done took %s", time.Since(runStart)))
+	if err != nil {
+		panic(wrapUploadErr(sourceFilePath, remoteFilePath, err, stderrBuf.String()))
+	}
+	sshPrint(fmt.Sprintf("UploadFile done took %s", time.Since(start)))
+}
+
+func firstErr(errList ...error) error {
+	for _, err := range errList {
+		if err != nil && err != io.EOF {
+			return err
+		}
+	}
+	for _, err := range errList {
+		if err != nil {
+			return err
+		}
+	}
+	return fmt.Errorf("upload failed")
+}
+
+func wrapUploadErr(sourceFilePath, remoteFilePath string, err error, stderr string) error {
+	stderr = strings.TrimSpace(stderr)
+	if stderr != "" {
+		return fmt.Errorf("upload %s -> %s: %v: %s", sourceFilePath, remoteFilePath, err, stderr)
+	}
+	return fmt.Errorf("upload %s -> %s: %v", sourceFilePath, remoteFilePath, err)
 }
 
 func (c *Client) WriteBigFile(content string, remoteFilePath string) {
@@ -527,6 +589,8 @@ func (c *Client) WriteBigFile(content string, remoteFilePath string) {
 }
 
 func (c *Client) SUDOWriteBigFile(content string, remoteFilePath string) {
+	start := time.Now()
+	sshPrint(fmt.Sprintf("SUDOWriteBigFile start path=%s size=%d", remoteFilePath, len(content)))
 	randFileName := RandSeq(15)
 	tempFilePath := fmt.Sprintf("/tmp/%v.tmp", randFileName)
 	err := ioutil.WriteFile(tempFilePath, []byte(content), 0777)
@@ -537,6 +601,7 @@ func (c *Client) SUDOWriteBigFile(content string, remoteFilePath string) {
 	tempFilePathDest := fmt.Sprintf("/tmp/%v.tmp", randFileNameDest)
 	c.UploadFile(tempFilePath, tempFilePathDest)
 	c.SUDORun("mv %v %v", tempFilePathDest, remoteFilePath)
+	sshPrint(fmt.Sprintf("SUDOWriteBigFile done took %s", time.Since(start)))
 }
 
 func (c *Client) Exit() {

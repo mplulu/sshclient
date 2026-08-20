@@ -3,6 +3,7 @@ package sshclient
 import (
 	"fmt"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 )
@@ -23,6 +24,22 @@ func Log(format string, a ...interface{}) string {
 
 func sshPrint(msg string) {
 	fmt.Println("ssh", msg, time.Now().Format(FormatTime))
+}
+
+func sshCaller(skip int) string {
+	pc, _, _, ok := runtime.Caller(skip)
+	if !ok {
+		return "unknown"
+	}
+	fn := runtime.FuncForPC(pc)
+	if fn == nil {
+		return "unknown"
+	}
+	name := fn.Name()
+	if i := strings.LastIndex(name, "."); i >= 0 {
+		name = name[i+1:]
+	}
+	return strings.TrimSuffix(name, "-fm")
 }
 
 func GetStack() string {
