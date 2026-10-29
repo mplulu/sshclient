@@ -28,8 +28,8 @@ func NewSingleStreamWriter(bufferSize int) *SingleStreamWriter {
 func (c *Client) StreamOutput(command string) <-chan []byte {
 	session := c.createNewSession()
 	stdoutBuf := NewSingleStreamWriter(1024)
-	session.Stdout = stdoutBuf
-	session.Stderr = stdoutBuf
+	session.SetStdout(stdoutBuf)
+	session.SetStderr(stdoutBuf)
 
 	err := session.Start(command)
 	if err != nil {

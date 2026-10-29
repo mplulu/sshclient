@@ -33,6 +33,10 @@ type Client struct {
 	username, password, sshFolderPath, sshKeyPem, host, port string
 	knownHost                                                bool
 
+	// local is set when the host is 127.0.0.1/localhost: commands run with os/exec instead of ssh
+	local        bool
+	localHomeDir string
+
 	stdout *Writer
 
 	stdinPipe  io.WriteCloser
@@ -50,7 +54,7 @@ func NewClient(username, password, host, port string) (*Client, error) {
 
 		stdout: &Writer{},
 	}
-	err := client.connect()
+	err := client.connectOrLocal(client.connect)
 	if err != nil {
 		return nil, err
 	}
@@ -71,7 +75,7 @@ func NewClientSSHKey(username, password, sshFolderPath, host, port string) (*Cli
 
 		stdout: &Writer{},
 	}
-	err := client.connect()
+	err := client.connectOrLocal(client.connect)
 	if err != nil {
 		sshPrint(fmt.Sprintf("NewClientSSHKey error took %s", time.Since(start)))
 		return nil, err
@@ -91,7 +95,7 @@ func NewClientSSHKeyPem(username, sshKeyPem, host, port string) (*Client, error)
 
 		stdout: &Writer{},
 	}
-	err := client.connect()
+	err := client.connectOrLocal(client.connect)
 	if err != nil {
 		return nil, err
 	}
@@ -109,7 +113,7 @@ func NewClientPasswordAuth(username, password, host, port string) (*Client, erro
 
 		stdout: &Writer{},
 	}
-	err := client.connectPassword()
+	err := client.connectOrLocal(client.connectPassword)
 	if err != nil {
 		return nil, err
 	}
@@ -178,12 +182,12 @@ func (c *Client) connect() error {
 	return nil
 }
 
-func (c *Client) createNewSession() *ssh.Session {
+func (c *Client) createNewSession() cmdSession {
 	start := time.Now()
 	sshPrint(fmt.Sprintf("createNewSession start caller=%s", sshCaller(2)))
 	sessionStart := time.Now()
 	sshPrint("NewSession start")
-	session, err := c.client.NewSession()
+	session, err := c.newSession()
 	sshPrint(fmt.Sprintf("NewSession done took %s", time.Since(sessionStart)))
 	if err != nil {
 		panic(err)
@@ -212,8 +216,8 @@ func (c *Client) createNewSession() *ssh.Session {
 	}
 
 	writer := NewPasswordPromptWriter(in, c.username, c.password)
-	session.Stdout = writer
-	session.Stderr = writer
+	session.SetStdout(writer)
+	session.SetStderr(writer)
 
 	sshPrint(fmt.Sprintf("createNewSession done took %s", time.Since(start)))
 	return session
@@ -236,7 +240,7 @@ func (c *Client) Run(cmd string, a ...interface{}) {
 }
 
 func (c *Client) RunYes(cmd string, a ...interface{}) {
-	session, err := c.client.NewSession()
+	session, err := c.newSession()
 	if err != nil {
 		panic(err)
 	}
@@ -259,8 +263,8 @@ func (c *Client) RunYes(cmd string, a ...interface{}) {
 	}
 
 	writer := NewYesPromptWriter(in)
-	session.Stdout = writer
-	session.Stderr = writer
+	session.SetStdout(writer)
+	session.SetStderr(writer)
 
 	err = session.Run(fmt.Sprintf(cmd, a...))
 	if err != nil {
@@ -269,7 +273,7 @@ func (c *Client) RunYes(cmd string, a ...interface{}) {
 }
 
 func (c *Client) RunMultipleCmds(cmds []string, delayDuration time.Duration) {
-	session, err := c.client.NewSession()
+	session, err := c.newSession()
 	if err != nil {
 		panic(err)
 	}
@@ -286,8 +290,8 @@ func (c *Client) RunMultipleCmds(cmds []string, delayDuration time.Duration) {
 		panic(err)
 	}
 	var stdOut stdOutSingleWriter
-	session.Stdout = &stdOut
-	session.Stderr = &stdOut
+	session.SetStdout(&stdOut)
+	session.SetStderr(&stdOut)
 
 	in, err := session.StdinPipe()
 	if err != nil {
@@ -307,23 +311,6 @@ func (c *Client) RunMultipleCmds(cmds []string, delayDuration time.Duration) {
 	}
 }
 
-func (c *Client) PromptRun(suffixList, answerList []string, cmd string, a ...interface{}) {
-	session := c.createNewSession()
-	defer session.Close()
-
-	in, err := session.StdinPipe()
-	if err != nil {
-		panic(err)
-	}
-	writer := NewPromptWriter(in, suffixList, answerList)
-	session.Stdout = writer
-	session.Stderr = writer
-	err = session.Run(fmt.Sprintf(cmd, a...))
-	if err != nil {
-		panic(err)
-	}
-}
-
 func (c *Client) Output(cmd string) string {
 	start := time.Now()
 	sshPrint(fmt.Sprintf("Output start cmd=%s", cmd))
@@ -331,8 +318,8 @@ func (c *Client) Output(cmd string) string {
 	defer session.Close()
 
 	var stdoutBuf singleWriter
-	session.Stdout = &stdoutBuf
-	session.Stderr = &stdoutBuf
+	session.SetStdout(&stdoutBuf)
+	session.SetStderr(&stdoutBuf)
 	runStart := time.Now()
 	sshPrint("session.Run start")
 	err := session.Run(cmd)
@@ -350,14 +337,18 @@ func (c *Client) OutputIgnoreError(cmd string) string {
 	defer session.Close()
 
 	var stdoutBuf bytes.Buffer
-	session.Stdout = &stdoutBuf
+	session.SetStdout(&stdoutBuf)
+	if c.local {
+		// over ssh the pty merges stderr into stdout; do the same locally so callers see identical output
+		session.SetStderr(&stdoutBuf)
+	}
 	session.Run(cmd)
 	return stdoutBuf.String()
 }
 
 func (c *Client) SUDORun(cmd string, a ...interface{}) {
 	start := time.Now()
-	fullCmd := fmt.Sprintf("sudo %s", fmt.Sprintf(cmd, a...))
+	fullCmd := fmt.Sprintf("%s %s", c.sudo(), fmt.Sprintf(cmd, a...))
 	sshPrint(fmt.Sprintf("SUDORun start cmd=%s", fullCmd))
 	session := c.createNewSession()
 	defer session.Close()
@@ -376,7 +367,8 @@ func (c *Client) SUDOWriteToFile(content, filePath string) {
 	sshPrint(fmt.Sprintf("SUDOWriteToFile start path=%s size=%d", filePath, len(content)))
 	session := c.createNewSession()
 	defer session.Close()
-	cmd := fmt.Sprintf("cat <<'EOF' | sudo tee %s\n%s\nEOF\n", filePath, content)
+	// tee output goes to /dev/null so file content (e.g. ssl keys) is not echoed into logs
+	cmd := fmt.Sprintf("cat <<'EOF' | %s tee %s > /dev/null\n%s\nEOF\n", c.sudo(), filePath, content)
 	runStart := time.Now()
 	sshPrint("SUDOWriteToFile session.Run start")
 	err := session.Run(cmd)
@@ -390,7 +382,7 @@ func (c *Client) SUDOWriteToFile(content, filePath string) {
 func (c *Client) WriteToFile(content, filePath string) {
 	session := c.createNewSession()
 	defer session.Close()
-	cmd := fmt.Sprintf("cat <<'EOF' | tee %s\n%s\nEOF\n", filePath, content)
+	cmd := fmt.Sprintf("cat <<'EOF' | tee %s > /dev/null\n%s\nEOF\n", filePath, content)
 	err := session.Run(cmd)
 	if err != nil {
 		panic(err)
@@ -400,7 +392,7 @@ func (c *Client) WriteToFile(content, filePath string) {
 func (c *Client) WriteToFileExperiment(content, filePath string) {
 	session := c.createNewSession()
 	defer session.Close()
-	cmd := fmt.Sprintf("cat <<'EOF' | tee %s\n%s\nEOF\n", filePath, content)
+	cmd := fmt.Sprintf("cat <<'EOF' | tee %s > /dev/null\n%s\nEOF\n", filePath, content)
 	err := session.Run(cmd)
 	if err != nil {
 		panic(err)
@@ -423,7 +415,7 @@ func (c *Client) IsFileExist(filePath string) bool {
 	defer session.Close()
 
 	var stdoutBuf bytes.Buffer
-	session.Stdout = &stdoutBuf
+	session.SetStdout(&stdoutBuf)
 
 	cmd := fmt.Sprintf("(ls %s >> /dev/null 2>&1 && echo true) || echo false", filePath)
 	err := session.Run(cmd)
@@ -433,29 +425,8 @@ func (c *Client) IsFileExist(filePath string) bool {
 	return strings.TrimSpace(stdoutBuf.String()) == "true"
 }
 
-func (c *Client) PromptCreateNewPassword(password, cmd string, a ...interface{}) {
-	session := c.createNewSession()
-	defer session.Close()
-
-	in, err := session.StdinPipe()
-	if err != nil {
-		panic(err)
-	}
-
-	writer := &CreateNewPasswordWriter{
-		stdin:    in,
-		password: password,
-	}
-	session.Stdout = writer
-	session.Stderr = writer
-	err = session.Run(fmt.Sprintf(cmd, a...))
-	if err != nil {
-		panic(err)
-	}
-}
-
 func (c *Client) DownloadFile(remoteFilePath, destFilePath string) {
-	session, err := c.client.NewSession()
+	session, err := c.newSession()
 	if err != nil {
 		panic(err)
 	}
@@ -489,7 +460,15 @@ func (c *Client) DownloadFile(remoteFilePath, destFilePath string) {
 func (c *Client) UploadFile(sourceFilePath, remoteFilePath string) {
 	start := time.Now()
 	sshPrint(fmt.Sprintf("UploadFile start %s -> %s", sourceFilePath, remoteFilePath))
-	session, err := c.client.NewSession()
+	if c.local {
+		err := c.localCopyFile(sourceFilePath, remoteFilePath)
+		if err != nil {
+			panic(wrapUploadErr(sourceFilePath, remoteFilePath, err, ""))
+		}
+		sshPrint(fmt.Sprintf("UploadFile local done took %s", time.Since(start)))
+		return
+	}
+	session, err := c.newSession()
 	if err != nil {
 		panic(err)
 	}
@@ -514,7 +493,7 @@ func (c *Client) UploadFile(sourceFilePath, remoteFilePath string) {
 	}
 
 	var stderrBuf bytes.Buffer
-	session.Stderr = &stderrBuf
+	session.SetStderr(&stderrBuf)
 
 	cmd := fmt.Sprintf("/usr/bin/scp -t %s", remoteDir)
 	runStart := time.Now()
@@ -607,6 +586,12 @@ func (c *Client) SUDOWriteBigFile(content string, remoteFilePath string) {
 func (c *Client) Exit() {
 	start := time.Now()
 	sshPrint("Exit start")
+	if c.local {
+		// nothing to close for local exec
+		removeClientFromLog(c)
+		sshPrint(fmt.Sprintf("Exit local done took %s", time.Since(start)))
+		return
+	}
 	session := c.createNewSession()
 	defer session.Close()
 	runStart := time.Now()
