@@ -183,8 +183,14 @@ func (c *Client) connect() error {
 }
 
 func (c *Client) createNewSession() cmdSession {
+	return c.createNewSessionCapture(nil, sshCaller(2))
+}
+
+// createNewSessionCapture is createNewSession with an optional writer that
+// receives a copy of the session output (stdout+stderr, merged by the pty)
+func (c *Client) createNewSessionCapture(capture io.Writer, caller string) cmdSession {
 	start := time.Now()
-	sshPrint(fmt.Sprintf("createNewSession start caller=%s", sshCaller(2)))
+	sshPrint(fmt.Sprintf("createNewSession start caller=%s", caller))
 	sessionStart := time.Now()
 	sshPrint("NewSession start")
 	session, err := c.newSession()
@@ -216,6 +222,7 @@ func (c *Client) createNewSession() cmdSession {
 	}
 
 	writer := NewPasswordPromptWriter(in, c.username, c.password)
+	writer.capture = capture
 	session.SetStdout(writer)
 	session.SetStderr(writer)
 
@@ -223,18 +230,37 @@ func (c *Client) createNewSession() cmdSession {
 	return session
 }
 
+// maxRunErrorOutput caps how much captured output is attached to a run error
+// so a panic message (which may be forwarded to telegram) stays readable
+const maxRunErrorOutput = 2000
+
+// runError wraps a session error with the command and the output it produced,
+// so a panic shows e.g. "Process exited with status 127 ... zsh:1: command not found: zip"
+// instead of only the exit status
+func runError(err error, cmd string, output *singleWriter) error {
+	out := strings.TrimSpace(strings.ReplaceAll(output.String(), "\r", ""))
+	if len(out) > maxRunErrorOutput {
+		out = "..." + out[len(out)-maxRunErrorOutput:]
+	}
+	if out == "" {
+		return fmt.Errorf("%w\ncmd: %s", err, cmd)
+	}
+	return fmt.Errorf("%w\ncmd: %s\noutput: %s", err, cmd, out)
+}
+
 func (c *Client) Run(cmd string, a ...interface{}) {
 	start := time.Now()
 	fullCmd := fmt.Sprintf(cmd, a...)
 	sshPrint(fmt.Sprintf("Run start cmd=%s", fullCmd))
-	session := c.createNewSession()
+	var output singleWriter
+	session := c.createNewSessionCapture(&output, "Run")
 	defer session.Close()
 	runStart := time.Now()
 	sshPrint("Run session.Run start")
 	err := session.Run(fullCmd)
 	sshPrint(fmt.Sprintf("Run session.Run done took %s", time.Since(runStart)))
 	if err != nil {
-		panic(err)
+		panic(runError(err, fullCmd, &output))
 	}
 	sshPrint(fmt.Sprintf("Run done took %s", time.Since(start)))
 }
@@ -325,7 +351,7 @@ func (c *Client) Output(cmd string) string {
 	err := session.Run(cmd)
 	sshPrint(fmt.Sprintf("session.Run done took %s", time.Since(runStart)))
 	if err != nil {
-		panic(err)
+		panic(runError(err, cmd, &stdoutBuf))
 	}
 	sshPrint(fmt.Sprintf("Output done took %s", time.Since(start)))
 	return strings.Replace(stdoutBuf.b.String(), "\r", "", -1)
@@ -350,14 +376,15 @@ func (c *Client) SUDORun(cmd string, a ...interface{}) {
 	start := time.Now()
 	fullCmd := fmt.Sprintf("%s %s", c.sudo(), fmt.Sprintf(cmd, a...))
 	sshPrint(fmt.Sprintf("SUDORun start cmd=%s", fullCmd))
-	session := c.createNewSession()
+	var output singleWriter
+	session := c.createNewSessionCapture(&output, "SUDORun")
 	defer session.Close()
 	runStart := time.Now()
 	sshPrint("SUDORun session.Run start")
 	err := session.Run(fullCmd)
 	sshPrint(fmt.Sprintf("SUDORun session.Run done took %s", time.Since(runStart)))
 	if err != nil {
-		panic(err)
+		panic(runError(err, fullCmd, &output))
 	}
 	sshPrint(fmt.Sprintf("SUDORun done took %s", time.Since(start)))
 }

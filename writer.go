@@ -23,6 +23,9 @@ type PasswordPromptWriter struct {
 	stdin    io.WriteCloser
 	username string
 	password string
+	// capture, when set, receives a copy of everything written to stdout so the
+	// caller can include the remote output in an error/panic message
+	capture io.Writer
 }
 
 func NewPasswordPromptWriter(stdin io.WriteCloser, username, password string) *PasswordPromptWriter {
@@ -38,6 +41,9 @@ func (w *PasswordPromptWriter) Write(p []byte) (n int, err error) {
 	defer w.mutex.Unlock()
 
 	n, err = os.Stdout.Write(p)
+	if w.capture != nil {
+		w.capture.Write(p)
+	}
 	suffixList := []string{
 		fmt.Sprintf("[sudo] password for %s: ", w.username),
 		"Password: ",
@@ -124,6 +130,12 @@ func (w *singleWriter) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.b.Write(p)
+}
+
+func (w *singleWriter) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.b.String()
 }
 
 type stdOutSingleWriter struct {

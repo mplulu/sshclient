@@ -1,6 +1,8 @@
 package sshclient
 
 import (
+	"fmt"
+	"io"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -157,5 +159,55 @@ func TestSudoPrefix(t *testing.T) {
 	}
 	if got := (&Client{password: "x"}).sudo(); got != "sudo" {
 		t.Errorf("password got %q", got)
+	}
+}
+
+// panicMessage runs f and returns the recovered panic rendered as a string
+func panicMessage(t *testing.T, f func()) (msg string) {
+	t.Helper()
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic")
+		}
+		msg = fmt.Sprint(r)
+	}()
+	f()
+	return ""
+}
+
+func TestRunPanicIncludesOutput(t *testing.T) {
+	client := newLocalTestClient(t)
+	msg := panicMessage(t, func() { client.Run("echo before; sshclient-no-such-cmd-%d", 42) })
+	for _, want := range []string{"exit status 127", "cmd: echo before; sshclient-no-such-cmd-42", "output:", "before", "sshclient-no-such-cmd-42"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("panic %q missing %q", msg, want)
+		}
+	}
+	msg = panicMessage(t, func() { client.Output("sshclient-no-such-cmd-output") })
+	if !strings.Contains(msg, "sshclient-no-such-cmd-output") || !strings.Contains(msg, "output:") {
+		t.Fatalf("panic %q missing command output", msg)
+	}
+}
+
+func TestSetVerbose(t *testing.T) {
+	capture := func(f func()) string {
+		r, w, _ := os.Pipe()
+		old := os.Stdout
+		os.Stdout = w
+		f()
+		w.Close()
+		os.Stdout = old
+		b, _ := io.ReadAll(r)
+		return string(b)
+	}
+	SetVerbose(false)
+	if got := capture(func() { sshPrint("hidden") }); got != "" {
+		t.Fatalf("verbose off printed %q", got)
+	}
+	SetVerbose(true)
+	defer SetVerbose(false)
+	if got := capture(func() { sshPrint("shown") }); !strings.Contains(got, "ssh shown") {
+		t.Fatalf("verbose on printed %q", got)
 	}
 }

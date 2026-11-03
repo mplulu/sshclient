@@ -5,6 +5,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -22,7 +23,19 @@ func Log(format string, a ...interface{}) string {
 	return logStr
 }
 
+// verbose gates the per-step timing prints ("ssh NewSession start/done took ...").
+// Off by default; enable with SetVerbose(true) when debugging ssh latency.
+// Known-hosts warnings via Log() are always printed.
+var verbose atomic.Bool
+
+func SetVerbose(on bool) {
+	verbose.Store(on)
+}
+
 func sshPrint(msg string) {
+	if !verbose.Load() {
+		return
+	}
 	fmt.Println("ssh", msg, time.Now().Format(FormatTime))
 }
 
