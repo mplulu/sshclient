@@ -392,7 +392,8 @@ func (c *Client) SUDORun(cmd string, a ...interface{}) {
 func (c *Client) SUDOWriteToFile(content, filePath string) {
 	start := time.Now()
 	sshPrint(fmt.Sprintf("SUDOWriteToFile start path=%s size=%d", filePath, len(content)))
-	session := c.createNewSession()
+	var output singleWriter
+	session := c.createNewSessionCapture(&output, "SUDOWriteToFile")
 	defer session.Close()
 	// tee output goes to /dev/null so file content (e.g. ssl keys) is not echoed into logs
 	cmd := fmt.Sprintf("cat <<'EOF' | %s tee %s > /dev/null\n%s\nEOF\n", c.sudo(), filePath, content)
@@ -401,39 +402,42 @@ func (c *Client) SUDOWriteToFile(content, filePath string) {
 	err := session.Run(cmd)
 	sshPrint(fmt.Sprintf("SUDOWriteToFile session.Run done took %s", time.Since(runStart)))
 	if err != nil {
-		panic(err)
+		panic(runError(err, fmt.Sprintf("%s tee %s", c.sudo(), filePath), &output))
 	}
 	sshPrint(fmt.Sprintf("SUDOWriteToFile done took %s", time.Since(start)))
 }
 
 func (c *Client) WriteToFile(content, filePath string) {
-	session := c.createNewSession()
+	var output singleWriter
+	session := c.createNewSessionCapture(&output, "WriteToFile")
 	defer session.Close()
 	cmd := fmt.Sprintf("cat <<'EOF' | tee %s > /dev/null\n%s\nEOF\n", filePath, content)
 	err := session.Run(cmd)
 	if err != nil {
-		panic(err)
+		panic(runError(err, fmt.Sprintf("tee %s", filePath), &output))
 	}
 }
 
 func (c *Client) WriteToFileExperiment(content, filePath string) {
-	session := c.createNewSession()
+	var output singleWriter
+	session := c.createNewSessionCapture(&output, "WriteToFileExperiment")
 	defer session.Close()
 	cmd := fmt.Sprintf("cat <<'EOF' | tee %s > /dev/null\n%s\nEOF\n", filePath, content)
 	err := session.Run(cmd)
 	if err != nil {
-		panic(err)
+		panic(runError(err, fmt.Sprintf("tee %s", filePath), &output))
 	}
 }
 
 func (c *Client) AppendToFile(content, filePath string) {
-	session := c.createNewSession()
+	var output singleWriter
+	session := c.createNewSessionCapture(&output, "AppendToFile")
 	defer session.Close()
 
 	cmd := fmt.Sprintf("echo '%s' >> %s", content, filePath)
 	err := session.Run(cmd)
 	if err != nil {
-		panic(err)
+		panic(runError(err, fmt.Sprintf("echo ... >> %s", filePath), &output))
 	}
 }
 
