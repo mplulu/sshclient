@@ -129,6 +129,31 @@ func TestLocalFiles(t *testing.T) {
 	expectPanic(t, func() { client.UploadFile(path, filepath.Join(dir, "missing", "x")) })
 }
 
+func TestLocalWriteToFileDoesNotRunContent(t *testing.T) {
+	client := newLocalTestClient(t)
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "pwned")
+	path := filepath.Join(dir, "it's a.conf")
+	content := "return 301 https://x;\n}\nEOF\ntouch " + marker + "\n'; touch " + marker + "; echo '\n$(touch " + marker + ")\ncat <<'EOF'\n{"
+
+	client.WriteToFile(content, path)
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != content+"\n" {
+		t.Fatalf("write mismatch err=%v data=%q", err, data)
+	}
+
+	client.AppendToFile(content, path)
+	data, err = os.ReadFile(path)
+	if err != nil || string(data) != content+"\n"+content+"\n" {
+		t.Fatalf("append mismatch err=%v data=%q", err, data)
+	}
+
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("content was executed as a command")
+	}
+	expectPanic(t, func() { client.WriteToFile(content, filepath.Join(dir, "missing", "x")) })
+}
+
 func TestLocalStreamOutput(t *testing.T) {
 	client := newLocalTestClient(t)
 	var sb strings.Builder

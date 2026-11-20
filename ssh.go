@@ -407,38 +407,65 @@ func (c *Client) SUDOWriteToFile(content, filePath string) {
 	sshPrint(fmt.Sprintf("SUDOWriteToFile done took %s", time.Since(start)))
 }
 
+// WriteToFile writes content plus a trailing newline, the same bytes the old heredoc version wrote.
 func (c *Client) WriteToFile(content, filePath string) {
-	var output singleWriter
-	session := c.createNewSessionCapture(&output, "WriteToFile")
-	defer session.Close()
-	cmd := fmt.Sprintf("cat <<'EOF' | tee %s > /dev/null\n%s\nEOF\n", filePath, content)
-	err := session.Run(cmd)
-	if err != nil {
-		panic(runError(err, fmt.Sprintf("tee %s", filePath), &output))
-	}
+	c.teeFromStdin("WriteToFile", "tee "+shellQuotePath(filePath), content+"\n")
 }
 
 func (c *Client) WriteToFileExperiment(content, filePath string) {
-	var output singleWriter
-	session := c.createNewSessionCapture(&output, "WriteToFileExperiment")
-	defer session.Close()
-	cmd := fmt.Sprintf("cat <<'EOF' | tee %s > /dev/null\n%s\nEOF\n", filePath, content)
-	err := session.Run(cmd)
-	if err != nil {
-		panic(runError(err, fmt.Sprintf("tee %s", filePath), &output))
-	}
+	c.WriteToFile(content, filePath)
 }
 
 func (c *Client) AppendToFile(content, filePath string) {
-	var output singleWriter
-	session := c.createNewSessionCapture(&output, "AppendToFile")
+	c.teeFromStdin("AppendToFile", "tee -a "+shellQuotePath(filePath), content+"\n")
+}
+
+// teeFromStdin streams content to the remote command's stdin instead of embedding it in the command,
+// so no content (a line "EOF", a quote, `$(...)`) can end the data and run as a shell command.
+// The session has no pty on purpose: a pty's line discipline would rewrite the bytes and cap line length.
+func (c *Client) teeFromStdin(caller, teeCmd, content string) {
+	start := time.Now()
+	sshPrint(fmt.Sprintf("%s start cmd=%s size=%d", caller, teeCmd, len(content)))
+	session, err := c.newSession()
+	if err != nil {
+		panic(err)
+	}
 	defer session.Close()
 
-	cmd := fmt.Sprintf("echo '%s' >> %s", content, filePath)
-	err := session.Run(cmd)
+	var output singleWriter
+	session.SetStdout(&output)
+	session.SetStderr(&output)
+	in, err := session.StdinPipe()
 	if err != nil {
-		panic(runError(err, fmt.Sprintf("echo ... >> %s", filePath), &output))
+		panic(err)
 	}
+
+	cmd := teeCmd + " > /dev/null"
+	err = session.Start(cmd)
+	if err != nil {
+		panic(runError(err, cmd, &output))
+	}
+	_, writeErr := io.WriteString(in, content)
+	closeErr := in.Close()
+	waitErr := session.Wait()
+	for _, err := range []error{waitErr, writeErr, closeErr} {
+		if err != nil {
+			panic(runError(err, cmd, &output))
+		}
+	}
+	sshPrint(fmt.Sprintf("%s done took %s", caller, time.Since(start)))
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// shellQuotePath keeps a leading ~/ outside the quotes so callers that pass home-relative paths still work.
+func shellQuotePath(path string) string {
+	if strings.HasPrefix(path, "~/") {
+		return "~/" + shellQuote(path[2:])
+	}
+	return shellQuote(path)
 }
 
 func (c *Client) IsFileExist(filePath string) bool {
