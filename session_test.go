@@ -154,6 +154,41 @@ func TestLocalWriteToFileDoesNotRunContent(t *testing.T) {
 	expectPanic(t, func() { client.WriteToFile(content, filepath.Join(dir, "missing", "x")) })
 }
 
+func TestQuote(t *testing.T) {
+	client := newLocalTestClient(t)
+	for _, value := range []string{"", "plain", "it's", "a b", "$(id)", "`id`", "x\ny", `back\slash`, "'; touch /tmp/x; '"} {
+		got := client.Output("printf '%s' " + Quote(value))
+		if got != value {
+			t.Errorf("Quote(%q) round trip = %q", value, got)
+		}
+	}
+	if got := QuotePath("~/a b"); got != `~/'a b'` {
+		t.Errorf("QuotePath home = %s", got)
+	}
+	if got := QuotePath("/etc/it's"); got != `'/etc/it'\''s'` {
+		t.Errorf("QuotePath abs = %s", got)
+	}
+}
+
+func TestLocalPathHelpersQuotePath(t *testing.T) {
+	client := newLocalTestClient(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "it's a $(file).conf")
+	if client.IsFileExist(path) {
+		t.Fatal("file should not exist yet")
+	}
+	client.WriteToFile("x", path)
+	if !client.IsFileExist(path) {
+		t.Fatal("IsFileExist should find a path with a quote and spaces")
+	}
+	downloadPath := filepath.Join(dir, "download")
+	client.DownloadFile(path, downloadPath)
+	data, err := os.ReadFile(downloadPath)
+	if err != nil || string(data) != "x\n" {
+		t.Fatalf("download mismatch err=%v data=%q", err, data)
+	}
+}
+
 func TestLocalStreamOutput(t *testing.T) {
 	client := newLocalTestClient(t)
 	var sb strings.Builder

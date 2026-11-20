@@ -2,6 +2,7 @@ package sshclient
 
 import (
 	"bytes"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -248,6 +249,7 @@ func runError(err error, cmd string, output *singleWriter) error {
 	return fmt.Errorf("%w\ncmd: %s\noutput: %s", err, cmd, out)
 }
 
+// Run runs fmt.Sprintf(cmd, a...) in the remote shell. Wrap every non-constant value in Quote.
 func (c *Client) Run(cmd string, a ...interface{}) {
 	start := time.Now()
 	fullCmd := fmt.Sprintf(cmd, a...)
@@ -337,6 +339,7 @@ func (c *Client) RunMultipleCmds(cmds []string, delayDuration time.Duration) {
 	}
 }
 
+// Output runs cmd in the remote shell. Wrap every non-constant value in Quote.
 func (c *Client) Output(cmd string) string {
 	start := time.Now()
 	sshPrint(fmt.Sprintf("Output start cmd=%s", cmd))
@@ -389,27 +392,37 @@ func (c *Client) SUDORun(cmd string, a ...interface{}) {
 	sshPrint(fmt.Sprintf("SUDORun done took %s", time.Since(start)))
 }
 
+// SUDOWriteToFile writes content plus a trailing newline as root.
+// Without a sudo password, `sudo -n` never prompts, so content streams over stdin like WriteToFile.
+// With a password, sudo prompts on the pty, which would mangle stdin data, so the content travels
+// base64-encoded inside the command instead. That path is capped by the remote argument size limit
+// (128KB per argument on Linux), the same cap the old heredoc had.
 func (c *Client) SUDOWriteToFile(content, filePath string) {
+	content += "\n"
+	if c.sudo() == "sudo -n" {
+		c.teeFromStdin("SUDOWriteToFile", "sudo -n tee "+QuotePath(filePath), content)
+		return
+	}
+
 	start := time.Now()
 	sshPrint(fmt.Sprintf("SUDOWriteToFile start path=%s size=%d", filePath, len(content)))
 	var output singleWriter
 	session := c.createNewSessionCapture(&output, "SUDOWriteToFile")
 	defer session.Close()
-	// tee output goes to /dev/null so file content (e.g. ssl keys) is not echoed into logs
-	cmd := fmt.Sprintf("cat <<'EOF' | %s tee %s > /dev/null\n%s\nEOF\n", c.sudo(), filePath, content)
-	runStart := time.Now()
-	sshPrint("SUDOWriteToFile session.Run start")
+	teeCmd := fmt.Sprintf("%s tee %s", c.sudo(), QuotePath(filePath))
+	cmd := fmt.Sprintf("printf '%%s' %s | base64 -d | %s > /dev/null",
+		Quote(base64.StdEncoding.EncodeToString([]byte(content))), teeCmd)
 	err := session.Run(cmd)
-	sshPrint(fmt.Sprintf("SUDOWriteToFile session.Run done took %s", time.Since(runStart)))
 	if err != nil {
-		panic(runError(err, fmt.Sprintf("%s tee %s", c.sudo(), filePath), &output))
+		// report teeCmd, not cmd: cmd carries the content (e.g. an ssl key)
+		panic(runError(err, teeCmd, &output))
 	}
 	sshPrint(fmt.Sprintf("SUDOWriteToFile done took %s", time.Since(start)))
 }
 
 // WriteToFile writes content plus a trailing newline, the same bytes the old heredoc version wrote.
 func (c *Client) WriteToFile(content, filePath string) {
-	c.teeFromStdin("WriteToFile", "tee "+shellQuotePath(filePath), content+"\n")
+	c.teeFromStdin("WriteToFile", "tee "+QuotePath(filePath), content+"\n")
 }
 
 func (c *Client) WriteToFileExperiment(content, filePath string) {
@@ -417,7 +430,7 @@ func (c *Client) WriteToFileExperiment(content, filePath string) {
 }
 
 func (c *Client) AppendToFile(content, filePath string) {
-	c.teeFromStdin("AppendToFile", "tee -a "+shellQuotePath(filePath), content+"\n")
+	c.teeFromStdin("AppendToFile", "tee -a "+QuotePath(filePath), content+"\n")
 }
 
 // teeFromStdin streams content to the remote command's stdin instead of embedding it in the command,
@@ -456,16 +469,18 @@ func (c *Client) teeFromStdin(caller, teeCmd, content string) {
 	sshPrint(fmt.Sprintf("%s done took %s", caller, time.Since(start)))
 }
 
-func shellQuote(s string) string {
+// Quote returns s as one single-quoted shell word. Use it for every value put into a command
+// passed to Run, SUDORun, Output, OutputIgnoreError or StreamOutput: those run their string in a shell.
+func Quote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// shellQuotePath keeps a leading ~/ outside the quotes so callers that pass home-relative paths still work.
-func shellQuotePath(path string) string {
+// QuotePath is Quote that keeps a leading ~/ outside the quotes, so home-relative paths still expand.
+func QuotePath(path string) string {
 	if strings.HasPrefix(path, "~/") {
-		return "~/" + shellQuote(path[2:])
+		return "~/" + Quote(path[2:])
 	}
-	return shellQuote(path)
+	return Quote(path)
 }
 
 func (c *Client) IsFileExist(filePath string) bool {
@@ -475,7 +490,7 @@ func (c *Client) IsFileExist(filePath string) bool {
 	var stdoutBuf bytes.Buffer
 	session.SetStdout(&stdoutBuf)
 
-	cmd := fmt.Sprintf("(ls %s >> /dev/null 2>&1 && echo true) || echo false", filePath)
+	cmd := fmt.Sprintf("(ls %s >> /dev/null 2>&1 && echo true) || echo false", QuotePath(filePath))
 	err := session.Run(cmd)
 	if err != nil {
 		panic(err)
@@ -500,7 +515,7 @@ func (c *Client) DownloadFile(remoteFilePath, destFilePath string) {
 		panic(err)
 	}
 	defer file.Close()
-	cmd := fmt.Sprintf("cat %s", remoteFilePath)
+	cmd := fmt.Sprintf("cat %s", QuotePath(remoteFilePath))
 	if err := session.Start(cmd); err != nil {
 		panic(err)
 	}
@@ -553,7 +568,7 @@ func (c *Client) UploadFile(sourceFilePath, remoteFilePath string) {
 	var stderrBuf bytes.Buffer
 	session.SetStderr(&stderrBuf)
 
-	cmd := fmt.Sprintf("/usr/bin/scp -t %s", remoteDir)
+	cmd := fmt.Sprintf("/usr/bin/scp -t %s", QuotePath(remoteDir))
 	runStart := time.Now()
 	sshPrint("UploadFile scp start")
 	err = session.Start(cmd)
@@ -637,7 +652,7 @@ func (c *Client) SUDOWriteBigFile(content string, remoteFilePath string) {
 	randFileNameDest := RandSeq(15)
 	tempFilePathDest := fmt.Sprintf("/tmp/%v.tmp", randFileNameDest)
 	c.UploadFile(tempFilePath, tempFilePathDest)
-	c.SUDORun("mv %v %v", tempFilePathDest, remoteFilePath)
+	c.SUDORun("mv %s %s", Quote(tempFilePathDest), QuotePath(remoteFilePath))
 	sshPrint(fmt.Sprintf("SUDOWriteBigFile done took %s", time.Since(start)))
 }
 
